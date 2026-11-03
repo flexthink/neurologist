@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="wire" x1="35" y1="58" x2="190" y2="181" gradientUnits="userSpaceOnUse"><stop stop-color="#35F1D1"/><stop offset="1" stop-color="#5C9DFF"/></linearGradient>
+    <linearGradient id="lens" x1="115" y1="94" x2="230" y2="228" gradientUnits="userSpaceOnUse"><stop stop-color="#85FFF0"/><stop offset=".5" stop-color="#66C9FF"/><stop offset="1" stop-color="#C28AFF"/></linearGradient>
+    <radialGradient id="bg"><stop stop-color="#172D3C"/><stop offset="1" stop-color="#0B121E"/></radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4"/></filter>
+  </defs>
+  <rect x="4" y="4" width="248" height="248" rx="54" fill="url(#bg)"/>
+  <rect x="5" y="5" width="246" height="246" rx="53" stroke="#375566" stroke-opacity=".65" stroke-width="2"/>
+  <g stroke="url(#wire)" stroke-width="2.6" opacity=".65">
+    <path d="M43 72 92 49M43 72 92 102M43 72 92 155M43 128 92 49M43 128 92 102M43 128 92 155M43 184 92 102M43 184 92 155M92 49 148 76M92 49 148 131M92 102 148 76M92 102 148 131M92 102 148 184M92 155 148 131M92 155 148 184M148 76 196 103M148 131 196 103M148 131 196 157M148 184 196 157"/>
+  </g>
+  <g fill="#40F0D2" filter="url(#glow)" opacity=".6"><circle cx="43" cy="72" r="8"/><circle cx="43" cy="128" r="8"/><circle cx="43" cy="184" r="8"/><circle cx="92" cy="49" r="8"/><circle cx="92" cy="102" r="8"/><circle cx="92" cy="155" r="8"/></g>
+  <g fill="#0C252C" stroke="#76FFE5" stroke-width="3"><circle cx="43" cy="72" r="6"/><circle cx="43" cy="128" r="6"/><circle cx="43" cy="184" r="6"/><circle cx="92" cy="49" r="6"/><circle cx="92" cy="102" r="6"/><circle cx="92" cy="155" r="6"/></g>
+  <circle cx="156" cy="135" r="47" fill="#0C1D2B" fill-opacity=".85"/>
+  <g stroke="#79DFFF" stroke-width="3"><path d="m129 113 28 22-28 23m28-23 27-22m-27 22 27 23"/><g fill="#142938"><circle cx="129" cy="113" r="5"/><circle cx="129" cy="158" r="5"/><circle cx="184" cy="113" r="5"/><circle cx="184" cy="158" r="5"/></g><circle cx="157" cy="135" r="7" fill="#91FFF0" stroke="#91FFF0"/></g>
+  <g stroke="url(#lens)" filter="url(#glow)" opacity=".65"><circle cx="156" cy="135" r="48" stroke-width="8"/><path d="m191 171 34 36" stroke-width="15" stroke-linecap="round"/></g>
+  <circle cx="156" cy="135" r="48" stroke="url(#lens)" stroke-width="6"/>
+  <path d="m191 171 34 36" stroke="url(#lens)" stroke-width="12" stroke-linecap="round"/>
+  <path d="M122 118a38 38 0 0 1 25-20" stroke="#CCFFF7" stroke-opacity=".65" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

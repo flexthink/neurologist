@@ -1,0 +1,49 @@
+{
+  "title": "Tiny encoder",
+  "caption": "A minimal residual encoder.",
+  "showTitle": true,
+  "target": "paper",
+  "direction": "LR",
+  "palette": "teal",
+  "nodes": [
+    {
+      "id": "input",
+      "label": "Input",
+      "subtitle": "",
+      "sourceIds": [
+        "input"
+      ]
+    },
+    {
+      "id": "encoder",
+      "label": "Encoder",
+      "subtitle": "",
+      "sourceIds": [
+        "projection",
+        "activation"
+      ]
+    },
+    {
+      "id": "output",
+      "label": "Output",
+      "subtitle": "",
+      "sourceIds": [
+        "output"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "a",
+      "source": "input",
+      "target": "encoder",
+      "label": ""
+    },
+    {
+      "id": "b",
+      "source": "encoder",
+      "target": "output",
+      "label": ""
+    }
+  ]
+}

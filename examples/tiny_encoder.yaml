@@ -1,0 +1,4 @@
+# Representative configuration; navigation resolves key paths dynamically.
+model:
+  input_size: 128
+  hidden_size: 256

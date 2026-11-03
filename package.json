@@ -1,0 +1,203 @@
+{
+  "name": "neurologist",
+  "displayName": "Neurologist",
+  "description": "Explore neural architectures with Codex and interactive, source-linked graphs.",
+  "version": "0.8.0",
+  "publisher": "neurologist",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Visualization",
+    "Machine Learning"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCustomEditor:neurologist.graph",
+    "onView:neurologist.analysis",
+    "onView:neurologist.diagrams"
+  ],
+  "scripts": {
+    "build": "node esbuild.mjs && tsx scripts/schema.ts",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "package": "npm run check && npm run build && vsce package --allow-missing-repository",
+    "test:host": "npm run build && node scripts/smoke.mjs",
+    "test:ui": "npm run build && tsx scripts/ui-smoke.ts",
+    "branding": "node scripts/branding.mjs",
+    "test:present-host": "npm run build && node scripts/smoke.mjs --present",
+    "test:figure": "tsx --test test/figure.test.ts"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "neurologist.analyze",
+        "title": "Neurologist: Analyze Codebase"
+      },
+      {
+        "command": "neurologist.regenerate",
+        "title": "Neurologist: Regenerate Architecture"
+      },
+      {
+        "command": "neurologist.openSource",
+        "title": "Neurologist: Edit YAML"
+      },
+      {
+        "command": "neurologist.openDiagram",
+        "title": "Neurologist: Open Diagram"
+      },
+      {
+        "command": "neurologist.refreshDiagrams",
+        "title": "Neurologist: Refresh Diagrams",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "neurologist.present",
+        "title": "Neurologist: Present!",
+        "icon": "$(preview)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "neurologist.graph",
+        "displayName": "Neurologist Graph",
+        "selector": [
+          {
+            "filenamePattern": "*.neuro"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "languages": [
+      {
+        "id": "yaml",
+        "extensions": [
+          ".neuro"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Neurologist",
+      "properties": {
+        "neurologist.codexPath": {
+          "type": "string",
+          "default": "codex",
+          "description": "Codex CLI executable. Auto-detects PATH and common installation locations; supports an absolute path or ~/ path.",
+          "scope": "machine"
+        },
+        "neurologist.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codex model override. Empty uses your Codex configuration."
+        },
+        "neurologist.outputDirectory": {
+          "type": "string",
+          "default": ".neurologist",
+          "description": "Workspace-relative directory for generated architectures."
+        },
+        "neurologist.reasoningEffort": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codex reasoning effort override. Empty uses your Codex configuration. In-view pickers offer the efforts advertised by the selected model."
+        }
+      }
+    },
+    "yamlValidation": [
+      {
+        "fileMatch": "*.neuro",
+        "url": "./dist/neuro.schema.json"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "neurologist",
+          "title": "Neurologist",
+          "icon": "assets/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "neurologist": [
+        {
+          "id": "neurologist.analysis",
+          "name": "Analyze",
+          "type": "webview"
+        },
+        {
+          "id": "neurologist.diagrams",
+          "name": "Diagrams"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "neurologist.refreshDiagrams",
+          "when": "view == neurologist.diagrams",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "neurologist.present",
+          "when": "resourceExtname == .neuro",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "neurologist.present",
+          "when": "view == neurologist.diagrams && viewItem == neuroDiagram",
+          "group": "inline"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "neurologist.diagrams",
+        "contents": "Open a codebase folder to browse architecture diagrams.",
+        "when": "workspaceFolderCount == 0"
+      },
+      {
+        "view": "neurologist.diagrams",
+        "contents": "No .neuro diagrams yet. Use Analyze above to map your codebase, or [open the analysis tab](command:neurologist.analyze).",
+        "when": "workspaceFolderCount > 0"
+      }
+    ]
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^1.1.4",
+    "@xyflow/react": "^12.10.0",
+    "elkjs": "^0.12.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "yaml": "^2.8.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/dagre": "^0.7.52",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/vscode": "~1.96.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.55.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1"
+  },
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flexthink/neurologist.git"
+  }
+}

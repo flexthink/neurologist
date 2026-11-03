@@ -1,0 +1,44 @@
+version: 1
+title: Tiny encoder
+summary: An illustrative two-layer PyTorch encoder with a residual connection. Replace links with paths in your own codebase.
+instructions: Focus on the encoder and show tensor dimensions.
+nodes:
+  - id: input
+    label: Input features
+    kind: tensor
+    description: A batch of feature vectors.
+    parameters:
+      - { name: shape, value: '[batch, 128]' }
+    sources: []
+  - id: projection
+    label: Projection
+    kind: Linear
+    description: Projects features into the hidden space.
+    parameters:
+      - { name: in_features, value: '128' }
+      - { name: out_features, value: '256' }
+    sources:
+      - { kind: definition, file: examples/tiny_encoder.py, symbol: TinyEncoder }
+      - { kind: instantiation, file: examples/tiny_encoder.py, symbol: TinyEncoder.projection }
+      - { kind: configuration, file: examples/tiny_encoder.yaml, symbol: model.hidden_size }
+  - id: activation
+    label: ReLU
+    kind: activation
+    description: Applies a pointwise nonlinearity.
+    parameters:
+      - { name: shape, value: '[batch, 256]' }
+    sources:
+      - { kind: definition, file: examples/tiny_encoder.py, symbol: TinyEncoder.forward }
+  - id: output
+    label: Residual output
+    kind: addition
+    description: Adds the projected features back to the activated branch.
+    parameters:
+      - { name: shape, value: '[batch, 256]' }
+    sources:
+      - { kind: definition, file: examples/tiny_encoder.py, symbol: TinyEncoder.forward }
+edges:
+  - { id: input-projection, source: input, target: projection, label: '[B, 128]' }
+  - { id: projection-activation, source: projection, target: activation, label: '[B, 256]' }
+  - { id: activation-output, source: activation, target: output, label: activated }
+  - { id: residual, source: projection, target: output, label: residual }

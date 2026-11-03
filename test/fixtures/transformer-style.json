@@ -1,0 +1,196 @@
+{
+  "title": "Transformer encoder",
+  "caption": "Illustrative encoder with a repeated attention / feed-forward stack.",
+  "showTitle": false,
+  "target": "paper",
+  "direction": "BT",
+  "palette": "transformer",
+  "nodes": [
+    {
+      "id": "inputs",
+      "label": "Inputs",
+      "subtitle": "",
+      "kind": "input",
+      "sourceIds": [
+        "inputs"
+      ]
+    },
+    {
+      "id": "embedding",
+      "label": "Input Embedding",
+      "subtitle": "",
+      "kind": "embedding",
+      "sourceIds": [
+        "embedding"
+      ]
+    },
+    {
+      "id": "position",
+      "label": "Positional Encoding",
+      "subtitle": "",
+      "kind": "embedding",
+      "sourceIds": [
+        "position"
+      ]
+    },
+    {
+      "id": "add",
+      "label": "+",
+      "subtitle": "",
+      "kind": "addition",
+      "sourceIds": [
+        "add"
+      ]
+    },
+    {
+      "id": "attention",
+      "label": "Multi-Head Attention",
+      "subtitle": "",
+      "kind": "attention",
+      "sourceIds": [
+        "attention"
+      ]
+    },
+    {
+      "id": "norm1",
+      "label": "Add & Norm",
+      "subtitle": "",
+      "kind": "normalization",
+      "sourceIds": [
+        "norm1"
+      ]
+    },
+    {
+      "id": "ff",
+      "label": "Feed Forward",
+      "subtitle": "",
+      "kind": "feedforward",
+      "sourceIds": [
+        "ff"
+      ]
+    },
+    {
+      "id": "norm2",
+      "label": "Add & Norm",
+      "subtitle": "",
+      "kind": "normalization",
+      "sourceIds": [
+        "norm2"
+      ]
+    },
+    {
+      "id": "linear",
+      "label": "Linear",
+      "subtitle": "",
+      "kind": "projection",
+      "sourceIds": [
+        "linear"
+      ]
+    },
+    {
+      "id": "softmax",
+      "label": "Softmax",
+      "subtitle": "",
+      "kind": "output",
+      "sourceIds": [
+        "softmax"
+      ]
+    },
+    {
+      "id": "outputs",
+      "label": "Output Probabilities",
+      "subtitle": "",
+      "kind": "input",
+      "sourceIds": [
+        "outputs"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "encoder",
+      "label": "",
+      "repeat": "6×",
+      "nodeIds": [
+        "attention",
+        "norm1",
+        "ff",
+        "norm2"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge0",
+      "source": "inputs",
+      "target": "embedding",
+      "label": ""
+    },
+    {
+      "id": "edge1",
+      "source": "embedding",
+      "target": "add",
+      "label": ""
+    },
+    {
+      "id": "edge2",
+      "source": "position",
+      "target": "add",
+      "label": ""
+    },
+    {
+      "id": "edge3",
+      "source": "add",
+      "target": "attention",
+      "label": ""
+    },
+    {
+      "id": "edge4",
+      "source": "attention",
+      "target": "norm1",
+      "label": ""
+    },
+    {
+      "id": "edge5",
+      "source": "add",
+      "target": "norm1",
+      "label": ""
+    },
+    {
+      "id": "edge6",
+      "source": "norm1",
+      "target": "ff",
+      "label": ""
+    },
+    {
+      "id": "edge7",
+      "source": "ff",
+      "target": "norm2",
+      "label": ""
+    },
+    {
+      "id": "edge8",
+      "source": "norm1",
+      "target": "norm2",
+      "label": ""
+    },
+    {
+      "id": "edge9",
+      "source": "norm2",
+      "target": "linear",
+      "label": ""
+    },
+    {
+      "id": "edge10",
+      "source": "linear",
+      "target": "softmax",
+      "label": ""
+    },
+    {
+      "id": "edge11",
+      "source": "softmax",
+      "target": "outputs",
+      "label": ""
+    }
+  ]
+}
