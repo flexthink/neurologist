@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {z} from 'zod';
-import {resolvePythonAnchor,emptyDebugState,debugPlanSchema,debugReplySchema,type DebugAction} from '../src/debugModel';
+import {resolvePythonAnchor,emptyDebugState,debugPlanOutputSchema,debugPlanSchema,debugReplySchema,type DebugAction} from '../src/debugModel';
 import {DebugRuntime} from '../src/debugRuntime';
 import {parseArchitecture,validateArchitecture} from '../src/model';
 import {analysisOutputSchema,chatOutputSchema} from '../src/outputSchemas';
@@ -23,7 +23,7 @@ test('legacy YAML needs no execution field; invalid anchor node/path is rejected
 });
 test('every new debugger output schema uses required fields, closed objects, and supported unions',()=>{
   const walk=(s:any)=>{if(!s||typeof s!=='object')return;assert.ok(!('oneOf'in s));assert.ok(!('exclusiveMinimum'in s));if(s.type==='object'){assert.equal(s.additionalProperties,false);assert.deepEqual(new Set(s.required),new Set(Object.keys(s.properties)));}for(const v of Object.values(s))if(Array.isArray(v))v.forEach(walk);else walk(v);};
-  for(const schema of [debugPlanSchema,debugReplySchema,analysisOutputSchema,chatOutputSchema])walk(z.toJSONSchema(schema));
+  for(const schema of [debugPlanOutputSchema,debugReplySchema,analysisOutputSchema,chatOutputSchema])walk(z.toJSONSchema(schema));
 });
 const action=(command:DebugAction['command'],extra:Partial<DebugAction>={}):DebugAction=>({command,expression:'',node:'',reference:0,frame:0,...extra});
 test('DAP stops highlight the invocation module, evaluate graph watches, and clear highlights on resume',async()=>{

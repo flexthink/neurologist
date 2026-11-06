@@ -2,7 +2,7 @@
   "name": "neurologist",
   "displayName": "Neurologist",
   "description": "Explore neural architectures with Codex and interactive, source-linked graphs.",
-  "version": "0.10.1",
+  "version": "0.12.1",
   "publisher": "neurologist",
   "license": "MIT",
   "engines": {
@@ -17,7 +17,8 @@
   "activationEvents": [
     "onCustomEditor:neurologist.graph",
     "onView:neurologist.analysis",
-    "onView:neurologist.diagrams"
+    "onView:neurologist.diagrams",
+    "onView:neurologist.scenarios"
   ],
   "scripts": {
     "build": "node esbuild.mjs && tsx scripts/schema.ts",
@@ -59,6 +60,21 @@
         "command": "neurologist.present",
         "title": "Neurologist: Present!",
         "icon": "$(preview)"
+      },
+      {
+        "command": "neurologist.loadScenario",
+        "title": "Neurologist: Load Debugging Scenario",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "neurologist.runScenario",
+        "title": "Neurologist: Run Debugging Scenario",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "neurologist.renameScenario",
+        "title": "Neurologist: Rename Debugging Scenario",
+        "icon": "$(edit)"
       }
     ],
     "customEditors": [
@@ -132,6 +148,10 @@
         {
           "id": "neurologist.diagrams",
           "name": "Diagrams"
+        },
+        {
+          "id": "neurologist.scenarios",
+          "name": "Debugging scenarios"
         }
       ]
     },
@@ -155,6 +175,16 @@
           "command": "neurologist.present",
           "when": "view == neurologist.diagrams && viewItem == neuroDiagram",
           "group": "inline"
+        },
+        {
+          "command": "neurologist.runScenario",
+          "when": "view == neurologist.scenarios && viewItem == neuroScenario",
+          "group": "inline"
+        },
+        {
+          "command": "neurologist.renameScenario",
+          "when": "view == neurologist.scenarios && viewItem == neuroScenario",
+          "group": "inline"
         }
       ]
     },
@@ -167,6 +197,11 @@
       {
         "view": "neurologist.diagrams",
         "contents": "No .neuro diagrams yet. Use Analyze above to map your codebase, or [open the analysis tab](command:neurologist.analyze).",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "view": "neurologist.scenarios",
+        "contents": "Prepare a debugging scenario from a diagram’s Debug chat. Named scenarios are saved here for reuse.",
         "when": "workspaceFolderCount > 0"
       }
     ]

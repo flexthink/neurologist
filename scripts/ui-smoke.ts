@@ -43,13 +43,31 @@ try {
   await page.getByRole('button',{name:'Prepare scenario',exact:true}).click();
   assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugPrepare'&&m.message.includes('encoder inference')&&m.instructions.includes('Mock network services'))));
   await page.locator('.debugInstructions summary').click();
-  const debugState={status:'prepared',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],entry:'.neurologist/debug/scenario.py',messages:[{role:'assistant',content:'Entry script is ready for review.'}],busy:false};
+  const debugState={scenarioId:'inference',scenarioName:'Synthetic inference',scenarios:[{id:'inference',name:'Synthetic inference'},{id:'alternate',name:'Alternate inference'}],status:'prepared',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],entry:'.neurologist/debug/scenario.py',messages:[{role:'assistant',content:'Entry script is ready for review.'}],busy:false};
   await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),debugState);
+  await page.getByLabel('Saved debugging scenarios',{exact:true}).selectOption('alternate');
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugLoadScenario'&&m.id==='alternate')));
+  await page.getByRole('button',{name:'Rename',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugRenameScenario')));
   await page.getByRole('button',{name:'Run debug',exact:true}).click();
   assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugRun')));
   const stopped={...debugState,status:'stopped',reason:'breakpoint',activeNodes:['projection'],frameId:10,stack:[{id:10,name:'Encoder.forward',line:7,source:{name:'tiny_encoder.py'}}],watches:[{id:'shape',node:'projection',expression:'x.shape',value:'[2, 128]',stale:false}]};
   await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),stopped);
   await page.locator('.react-flow__node.debugStopped[data-id="projection"]').waitFor();
+  const debugToolbar=page.getByRole('toolbar',{name:'Debugger controls',exact:true});
+  assert.equal(await debugToolbar.locator('button svg').count(),10);
+  assert.equal(await page.locator('.debuggerPane .debugControls').count(),0);
+  const toolbarBounds=await debugToolbar.boundingBox(),chartBounds=await page.locator('.canvas').boundingBox();
+  assert.ok(toolbarBounds&&chartBounds&&toolbarBounds.y+toolbarBounds.height<=chartBounds.y+1,'Debugger toolbar belongs above the chart');
+  await debugToolbar.getByRole('button',{name:'Continue',exact:true}).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'Step over');
+  const originalViewport=page.viewportSize()!;
+  await page.setViewportSize({width:700,height:900});
+  assert.equal(await debugToolbar.evaluate(el=>el.clientHeight<55),true,'Narrow toolbar stays on one row');
+  await debugToolbar.getByRole('button',{name:'Leap',exact:true}).click();
+  await page.setViewportSize(originalViewport);
+
   await page.getByText('Paused in this module',{exact:false}).waitFor();
   assert.equal(await page.locator('.moduleWatches').getByText('[2, 128]',{exact:true}).count(),1);
   await page.getByLabel('Ask the debugger',{exact:true}).fill('Explain this shape and watch hidden.dtype on projection');
@@ -57,6 +75,24 @@ try {
   assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugChat'&&m.message.includes('hidden.dtype'))));
   await page.getByRole('button',{name:'Step over',exact:true}).click();
   assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCommand'&&m.command==='next')));
+  assert.equal(await page.getByRole('button',{name:'Escape loop',exact:true}).isDisabled(),true);
+  await page.getByRole('button',{name:'Leap',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCommand'&&m.command==='leap')));
+  await page.evaluate(state=>window.postMessage({type:'debugState',state:{...state,detectedLoop:['projection','activation'],trace:[['projection'],['activation'],['projection'],['activation']]}},'*'),stopped);
+  await page.getByRole('button',{name:'Escape loop',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCommand'&&m.command==='escapeLoop')));
+  await page.locator('.navigationSettings summary').click();
+  await page.getByLabel('Maximum skipped stops',{exact:true}).fill('25');
+  await page.locator('.navigationSettings summary').click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugNavigationSettings'&&m.settings.maxSkippedStops===25)));
+  await page.evaluate(state=>window.postMessage({type:'debugState',state:{...state,status:'running',busy:true,navigation:{kind:'runTo',stops:4,cycleNodes:[],target:'output'}}},'*'),stopped);
+  await page.getByRole('button',{name:'Hide debugger',exact:true}).click();
+  await debugToolbar.waitFor();
+  await page.getByRole('button',{name:'Cancel navigation',exact:true}).click();
+  await page.getByRole('button',{name:'Debug',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCancelNavigation')));
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),stopped);
+
   await page.locator('.debugWatches summary').click();
   await page.getByLabel('Watch module',{exact:true}).selectOption('projection');
   await page.getByLabel('Watch expression',{exact:true}).fill('x.dtype');
@@ -329,7 +365,7 @@ target.messages.push(message);if(message.type==='ready')setTimeout(()=>window.po
   await presentation.setViewportSize({width:600,height:900});
   assert.equal(await presentation.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   assert.deepEqual(errors,[]);
-  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, effort compatibility resets, and Demo Mode navigation, transient effects, independent demos, playback, source-view restoration, debugger scenario/chat controls, stopped-module highlights, and scoped inline watches.');
+  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, effort compatibility resets, and Demo Mode navigation, transient effects, independent demos, playback, source-view restoration, debugger scenario/chat controls, stopped-module highlights, scoped inline watches, Leap/Escape controls, navigation limits, and interruption controls.');
 } finally {await browser.close(); server.close();}
 
 }

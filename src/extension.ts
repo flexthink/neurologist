@@ -1,3 +1,4 @@
+import {ScenarioProvider,type ScenarioTreeEntry} from './debugScenarios';
 export {DebugController} from './debugController';
 import {DebugController} from './debugController';
 import * as vscode from 'vscode';
@@ -27,6 +28,17 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(output, diagnostics);
   const modelSettings=new ModelSettings(context);context.subscriptions.push(modelSettings);
   registerPresent(context,output,modelSettings);
+  const debugControllers=new Map<string,DebugController>();
+  const scenarios=new ScenarioProvider();context.subscriptions.push(scenarios,vscode.window.createTreeView('neurologist.scenarios',{treeDataProvider:scenarios}));
+  for(const [command,run,rename] of [['neurologist.loadScenario',false,false],['neurologist.runScenario',true,false],['neurologist.renameScenario',false,true]] as const)context.subscriptions.push(vscode.commands.registerCommand(command,async (entry:ScenarioTreeEntry)=>{
+    try{
+      if(!entry?.folder||!entry.scenario)throw new Error('Select a saved scenario in the Neurologist sidebar.');
+      const uri=vscode.Uri.joinPath(entry.folder.uri,entry.scenario.diagram);await ensureWithinWorkspace(entry.folder,uri);
+      await vscode.commands.executeCommand('vscode.openWith',uri,'neurologist.graph');
+      const controller=debugControllers.get(uri.toString());if(!controller)throw new Error('Could not open the scenario diagram.');
+      if(rename)await controller.renameScenario(entry.scenario.id);else await controller.loadScenario(entry.scenario.id,run);
+    }catch(error){handleError(error);}
+  }));
   const diagrams=new DiagramProvider();
   context.subscriptions.push(diagrams,vscode.window.createTreeView('neurologist.diagrams',{treeDataProvider:diagrams,showCollapseAll:true}));
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('neurologist.analysis',new AnalysisView(context,modelSettings),{webviewOptions:{retainContextWhenHidden:true}}));
@@ -194,6 +206,8 @@ export function activate(context: vscode.ExtensionContext) {
       panels.set(document.uri.toString(), panel);
       const modelBinding=modelSettings.bind(panel.webview,()=>vscode.workspace.getWorkspaceFolder(document.uri));
       const debuggerController=new DebugController(document,panel,modelSettings,output,context.workspaceState);
+      debugControllers.set(document.uri.toString(),debuggerController);
+      panel.onDidDispose(()=>{if(debugControllers.get(document.uri.toString())===debuggerController)debugControllers.delete(document.uri.toString());});
       const snapshot=pendingSnapshots.get(document.uri.toString());
       if (snapshot) {activitySnapshots.set(panel,snapshot);pendingSnapshots.delete(document.uri.toString());}
       const history:ChatTurn[] = context.workspaceState.get<ChatTurn[]>('chat:'+document.uri.toString(),[]).slice(-40);

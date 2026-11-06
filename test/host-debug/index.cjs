@@ -11,13 +11,21 @@ exports.run=async()=>{
   const diagramGroup=vscode.window.tabGroups.activeTabGroup;
   const stored=new Map(),storage={get:(key,fallback)=>stored.get(key)??fallback,update:async(key,value)=>{stored.set(key,value);}};
   const model=vscode.Uri.joinPath(folder.uri,'debug-model.js');
-  await fs.writeFile(model.fsPath,'function encoder(x) {\n  const hidden = x.map(v => v * 2);\n  return hidden;\n}\nmodule.exports={encoder};\n');
-  const symbols=vscode.languages.registerDocumentSymbolProvider({language:'javascript',scheme:'file'},{provideDocumentSymbols:doc=>doc.uri.toString()===model.toString()?[new vscode.DocumentSymbol('encoder','',vscode.SymbolKind.Function,new vscode.Range(0,0,3,1),new vscode.Range(0,9,0,16))]:[]});
+  await fs.writeFile(model.fsPath,'function encoder(x) {\n  const hidden = x.map(v => v * 2);\n  return hidden;\n}\nfunction activation(x) {\n  const activated = x.map(v => Math.max(0,v));\n  return activated;\n}\nfunction output(x) {\n  const result = x;\n  return result;\n}\nmodule.exports={encoder,activation,output};\n');
+  const symbols=vscode.languages.registerDocumentSymbolProvider({language:'javascript',scheme:'file'},{provideDocumentSymbols:doc=>doc.uri.toString()===model.toString()?['encoder','activation','output'].map((name,i)=>new vscode.DocumentSymbol(name,'',vscode.SymbolKind.Function,new vscode.Range(i*4,0,i*4+3,1),new vscode.Range(i*4,9,i*4,9+name.length))):[]});
   const node=process.env.NEUROLOGIST_TEST_NODE,mock=vscode.Uri.joinPath(folder.uri,'mock-codex-debug');
-  const plan={reply:'Prepared an inference scenario.',entry:{language:'javascript',code:"const {encoder}=require(process.cwd()+'/debug-model.js');\nconsole.log(encoder([1,2]));\n",args:[]},anchors:[{node:'projection',file:'debug-model.js',symbol:'encoder',kind:'forward',statement:'const hidden = x.map'}],watches:[{id:'shape',node:'projection',expression:'x.length'}]};
+  const plan={name:'Synthetic inference',reply:'Prepared an inference scenario.',entry:{language:'javascript',code:"const {encoder,activation,output}=require(process.cwd()+'/debug-model.js');\nlet x=[1,2];\nfor(let i=0;i<3;i++){x=encoder(x);x=activation(x);}\nconsole.log(output(x));\nsetInterval(()=>{},1000);\n",args:[]},anchors:[{node:'projection',file:'debug-model.js',symbol:'encoder',kind:'forward',statement:'const hidden = x.map'},{node:'activation',file:'debug-model.js',symbol:'activation',kind:'forward',statement:'const activated = x.map'},{node:'output',file:'debug-model.js',symbol:'output',kind:'forward',statement:'const result = x'}],watches:[{id:'shape',node:'projection',expression:'x.length'}]};
   const watchAction={reply:'Adding a graph watch for the input length.',action:{command:'watch',node:'projection',expression:'x.length',reference:0,frame:0}};
+  const predicateAction={reply:'Continuing until the encoder input reaches four.',action:{command:'runUntil',node:'projection',expression:'x[0] >= 4',reference:0,frame:0}};
+  const outputAction={reply:'Navigating to the first mapped output module.',action:{command:'runTo',node:'output',expression:'',reference:0,frame:0}};
   await fs.writeFile(mock.fsPath,`#!${node}
-const fs=require("node:fs");const args=process.argv.slice(2);let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{const schema=JSON.parse(fs.readFileSync(args[args.indexOf("--output-schema")+1],"utf8"));const result=schema.properties.entry?(prompt.endsWith("need-clarification")?{reply:"Which checkpoint should I use?",entry:null,anchors:[],watches:[]}:prompt.endsWith("cause-failure")?{...${JSON.stringify(plan)},anchors:[{node:"projection",file:"missing-file.js",symbol:"encoder",kind:"forward",statement:""}]}:prompt.endsWith("resume-with-context")&&!prompt.includes("Preparation failed:")?{reply:"Missing failure context",entry:null,anchors:[],watches:[]}:${JSON.stringify(plan)}):prompt.includes("chat-watch-")?{reply:"The live input length is 2. The graph watch is now visible.",action:null}:${JSON.stringify(watchAction)};fs.writeFileSync(args[args.indexOf("--output-last-message")+1],JSON.stringify(result));});
+const fs=require("node:fs");const args=process.argv.slice(2);let prompt="";process.stdin.on("data",c=>prompt+=c);process.stdin.on("end",()=>{
+ const schema=JSON.parse(fs.readFileSync(args[args.indexOf("--output-schema")+1],"utf8"));let result;
+ if(schema.properties.entry)result=prompt.endsWith("need-clarification")?{reply:"Which checkpoint should I use?",entry:null,anchors:[],watches:[]}:prompt.endsWith("cause-failure")?{...${JSON.stringify(plan)},anchors:[{node:"projection",file:"missing-file.js",symbol:"encoder",kind:"forward",statement:""}]}:prompt.endsWith("resume-with-context")&&!prompt.includes("Preparation failed:")?{reply:"Missing failure context",entry:null,anchors:[],watches:[]}:${JSON.stringify(plan)};
+ else{const marker="Action results for this request:\\n",tools=JSON.parse(prompt.slice(prompt.lastIndexOf(marker)+marker.length));const request=prompt.split("User request:\\n").at(-1).split("\\nAction results")[0];
+ result=tools.some(tool=>JSON.parse(tool.result).reason==="user-stop")?{reply:"Incorrect retry that must be blocked by the controller",action:{command:"continue",node:"",expression:"",reference:0,frame:0}}:tools.length?{reply:"The requested debugger action completed.",action:null}:request.includes("navigate-predicate-test")?${JSON.stringify(predicateAction)}:request.includes("navigate-output-test")?${JSON.stringify(outputAction)}:${JSON.stringify(watchAction)};}
+ fs.writeFileSync(args[args.indexOf("--output-last-message")+1],JSON.stringify(result));
+});
 `,{mode:0o755});
   await vscode.workspace.getConfiguration('neurologist').update('codexPath',mock.fsPath,vscode.ConfigurationTarget.Global);
   const tracing=vscode.debug.registerDebugAdapterTrackerFactory('*',{createDebugAdapterTracker:s=>{console.log('DEBUG HOST: adapter '+s.type+' parent='+s.parentSession?.id+' owner='+s.configuration.neurologistOwner);return {onDidSendMessage:m=>{if(m.type==='event'&&['stopped','continued','terminated'].includes(m.event))console.log('DEBUG HOST: event '+s.type+' '+m.event+' '+JSON.stringify(m.body));}};}});
@@ -40,6 +48,15 @@ const fs=require("node:fs");const args=process.argv.slice(2);let prompt="";proce
     console.log('DEBUG HOST: prepared '+JSON.stringify(last()));
     assert.equal(last().status,'prepared');assert.equal(activities.filter(a=>a.id==='validate').at(-1)?.state,'complete','Preparation must finish its validation activity');assert.ok(document.getText().includes('execution:'));assert.equal(document.isDirty,true);
     assert.equal(await fs.readFile(uri.fsPath,'utf8'),onDisk,'Preparing metadata must not save the YAML');
+    const firstScenario=last().scenarioId,firstEntry=last().entry;
+    assert.equal(last().scenarioName,'Synthetic inference');assert.equal(last().scenarios.length,1);
+    await controller.handle({type:'debugPrepare',message:'another-inference'});
+    assert.equal(last().scenarioName,'Synthetic inference (2)');assert.notEqual(last().entry,firstEntry);
+    await controller.handle({type:'debugLoadScenario',id:firstScenario});
+    assert.equal(last().entry,firstEntry);assert.equal(last().scenarioId,firstScenario);assert.equal(last().status,'prepared');
+    const metadata=JSON.parse(await fs.readFile(path.join(folder.uri.fsPath,'.neurologist/debug',firstScenario+'.scenario.json'),'utf8'));
+    metadata.name='Renamed inference';await fs.writeFile(path.join(folder.uri.fsPath,'.neurologist/debug',firstScenario+'.scenario.json'),JSON.stringify(metadata));
+    await controller.loadScenario(firstScenario);assert.equal(last().scenarioName,'Renamed inference');
     await controller.handle({type:'debugPrepare',message:''});assert.equal(last().busy,false);
     const sourceDoc=await vscode.workspace.openTextDocument(model),dirtyEdit=new vscode.WorkspaceEdit();
     dirtyEdit.insert(model,sourceDoc.positionAt(sourceDoc.getText().length),'// unsaved source test\n');await vscode.workspace.applyEdit(dirtyEdit);
@@ -51,7 +68,7 @@ const fs=require("node:fs");const args=process.argv.slice(2);let prompt="";proce
     console.log('DEBUG HOST: launching');
     await controller.handle({type:'debugRun'});console.log('DEBUG HOST: launched '+JSON.stringify(last()));
     await wait(()=>last()?.status==='stopped'&&!last()?.busy&&last()?.stack.length);
-    if(!last().activeNodes.includes('projection'))await controller.handle({type:'debugCommand',command:'continue'});
+    if(!last().activeNodes.includes('projection'))await controller.handle({type:'debugCommand',command:'leap'});
     await wait(()=>last()?.activeNodes.includes('projection')&&last()?.watches[0]?.value==='2');
     const isGraphVisible=()=>diagramGroup.activeTab?.input instanceof vscode.TabInputCustom&&diagramGroup.activeTab.input.viewType==='neurologist.graph';
     const sourcePath=last().stack[0].source.path;
@@ -68,15 +85,35 @@ const fs=require("node:fs");const args=process.argv.slice(2);let prompt="";proce
     await controller.handle({type:'debugChat',message:'Add a watch for x.length on projection and explain it.'});
     assert.ok(last().watches.some(w=>w.id.startsWith('chat-watch-')&&w.value==='2'),'Chat should execute watch action against the real paused process');
     assert.ok(last().messages.some(m=>m.role==='tool'));
+    await controller.handle({type:'debugCommand',command:'leap'});
+    assert.equal(last().navigationResult.reason,'user-stop','Leap must preserve the explicit user breakpoint');
+    await controller.handle({type:'debugChat',message:'navigate-output-test: keep going until the first output.'});
+    assert.equal(last().navigationResult.reason,'user-stop','Chat navigation must stop at a user breakpoint and never ask the model to retry it');assert.deepEqual(last().activeNodes,['projection']);
+    vscode.debug.removeBreakpoints([userBreakpoint]);
+    await controller.handle({type:'debugChat',message:'navigate-predicate-test: keep going until the encoder input is at least 4.'});
+    assert.equal(last().navigationResult.reason,'target');assert.equal(last().watches.find(w=>w.id==='live').value,'4');
+    assert.deepEqual([...last().detectedLoop].sort(),['activation','projection']);
+    await controller.handle({type:'debugCommand',command:'escapeLoop'});
+    assert.equal(last().navigationResult.reason,'escaped');assert.deepEqual(last().activeNodes,['output']);
+    await controller.handle({type:'debugChat',message:'navigate-output-test: keep going until you get the first output.'});
+    assert.equal(last().navigationResult.reason,'target');assert.deepEqual(last().activeNodes,['output']);
+    vscode.debug.addBreakpoints([userBreakpoint]);
     await controller.handle({type:'debugCommand',command:'next'});
     await wait(()=>last()?.status==='stopped'&&!last()?.busy);
     await wait(()=>isGraphVisible());
     assert.equal(vscode.window.tabGroups.all.length,groupCount);
     assert.equal(await fs.readFile(uri.fsPath,'utf8'),onDisk,'Launching must not autosave the source diagram');
+    const navigating=controller.handle({type:'debugCommand',command:'leap'});
+    await wait(()=>last()?.status==='running'&&last()?.navigation?.kind==='leap');
+    await controller.handle({type:'debugCancelNavigation'});await navigating;
+    assert.equal(last().navigationResult.reason,'cancelled');assert.equal(last().status,'stopped','Cancel must pause a target with no upcoming module breakpoint');
     await controller.handle({type:'debugStop'});await wait(()=>last()?.status==='terminated');
     assert.ok(vscode.debug.breakpoints.some(bp=>bp.id===userBreakpoint.id),'User breakpoint must survive cleanup');
     assert.equal(vscode.debug.breakpoints.length,1,'Owned breakpoints must be removed');
+    controller.dispose();
+    const restoredStates=[],restored=new DebugController(document,{get viewColumn(){return diagramGroup.viewColumn;},reveal:()=>{},webview:{postMessage:message=>{if(message.type==='debugState')restoredStates.push(JSON.parse(JSON.stringify(message.state)));return Promise.resolve(true);}}},{selection:()=>({model:'',effort:''})},output,storage);
+    try{await restored.handle({type:'debugReady'});assert.equal(restoredStates.at(-1).scenarios.length,2);await restored.loadScenario(firstScenario);assert.equal(restoredStates.at(-1).scenarioName,'Renamed inference');assert.ok(restoredStates.at(-1).watches.some(w=>w.id==='live'));assert.equal(restoredStates.at(-1).entry,firstEntry);}finally{restored.dispose();}
     succeeded=true;
   }finally{await document.save();controller.dispose();tracing.dispose();symbols.dispose();output.dispose();vscode.debug.removeBreakpoints([userBreakpoint]);await vscode.workspace.getConfiguration('neurologist').update('codexPath',undefined,vscode.ConfigurationTarget.Global);}
-  if(succeeded)console.log('HOST SMOKE PASSED: real Node debugger launch, generated entry, symbol-resolved breakpoint, stopped module highlight, live watches and chat tool loop, stepping, source autosave suppression, entry-group source routing with graph restoration, customized instructions, and owned breakpoint cleanup (mock Codex only).');
+  if(succeeded)console.log('HOST SMOKE PASSED: real Node debugger launch, generated entry, symbol-resolved breakpoint, stopped module highlight, live watches and chat tool loop, stepping, source autosave suppression, entry-group source routing with graph restoration, Leap/protected user stops, observed-loop escape, chat target/predicate navigation, interruption with no further module breakpoint, customized instructions, named scenario persistence/duplicate suffixes/reloading in a fresh controller, and owned breakpoint cleanup (mock Codex only).');
 };

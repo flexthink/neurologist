@@ -197,6 +197,26 @@ Watches appear **inside their owning React Flow cards**. Add them through chat o
 
 `npm run test:debug-host` uses a real Node debugger in isolated VS Code with mocked Codex preparation/chat. Unit tests cover schema compatibility, symbol resolution, stepping, scoped watches and stale events. Browser tests exercise preparation/chat controls and inline watches. No user model or paid model call runs during these tests.
 
+### Graph navigation: Leap and Escape loop
+
+- **Leap** continues until execution reaches a different graph node, skipping repeated stops in the current module.
+- **Escape loop** continues until execution reaches a node outside the detected repeating loop. For `1 → 2 → 3 → 2 → 3 → … → 4 → 5`, escaping `{2, 3}` stops at `4`. Detection uses the smallest repeated suffix in the observed module path, so an inner observed loop is preferred. The loop's node set is frozen when Escape starts, even if the path changes inside it. The button is disabled until a repeating path has been observed; loop inference is not a proof of source-level control flow.
+
+Both actions skip only Neurologist's module breakpoints. Explicit user breakpoints, exceptions, manual pauses, unknown stops and session termination stop navigation. Shared execution locations can map to multiple graph nodes; use distinct invocation anchors when that distinction matters.
+
+Expand **Navigation limits** to set **Maximum loop length**, **Maximum skipped stops**, and **Time limit (seconds)**. Defaults are 16 graph-node visits per repeating sequence, 500 stops, and 30 seconds. Limits are remembered per diagram. The panel shows the observed path, detected loop, progress, and the reason navigation stopped.
+
+**Cancel navigation** interrupts a button- or chat-started navigation action and requests a debugger pause, even when no further breakpoint is reached. Native debugger Pause/Stop also interrupt it. Time and skipped-stop limits prevent automatic continuation indefinitely. If the adapter cannot acknowledge a pause within a bounded grace period, Neurologist returns control and explicitly reports that the target has not stopped; Pause/Stop remain available.
+
+Debugger chat can orchestrate the same bounded navigation:
+
+- “Keep going until you get the first output.”
+- “Leap to the next module.”
+- “Escape this loop.”
+- “Continue until the encoder input satisfies `x.shape[0] == 1`.”
+
+Codex can choose a mapped node target (`runTo`) or a side-effect-free boolean predicate (`runUntil`), optionally restricted to one module. Predicate scope errors count as “not yet observed,” with the last error reported if the stop limit is reached. Reaching an output module's entry breakpoint does not itself prove that its output has been computed; questions about an actual output value need an appropriate predicate or subsequent inspection. Navigation limits and protected stops end the chat's navigation attempt, rather than silently restarting it.
+
 ## Demo walkthroughs
 
 Click **Create demo** in a diagram’s header to open Revise chat with an editable walkthrough request. Review it and press **Revise →** to generate the demo. The button does not send a request automatically. Revise chat also offers a demo creation example. Once the update is ready, use **▶ Demo** to play the walkthrough.
@@ -219,3 +239,9 @@ demos:
 ```
 
 `focus`, `point`, and `explain` target a node or edge ID. `highlight` and `dim` accept `nodes` and `edges` ID lists. `add` accepts arrays of full node and edge objects using the normal diagram schema; `remove` accepts ID lists. Adding and removing affect later steps within the demo; presentation effects apply only to their own step. Removing a node also removes its incident edges. Each step is replayed from an isolated copy of the diagram, and exiting restores the editor view without saving temporary changes. Groups are not part of the current diagram schema.
+
+Debugging scenarios are reusable. Codex suggests a descriptive name when preparing one; duplicate names receive numeric suffixes. Use **Rename** in the Debug pane or the scenario’s sidebar action to change it. The **Saved scenarios** selector loads the entry script, instructions, symbol-based execution anchors, graph watches, and navigation limits for review. Choose **Run debug** to run it again without regenerating it. The Neurologist sidebar’s **Debugging scenarios** section also offers Load, Run, and Rename actions. Loading a scenario requires stopping the current session first.
+
+Scenario metadata is stored in `.neurologist/debug/<id>.scenario.json` alongside the editable entry scripts. Keep both files to share or reuse a scenario after restarting VS Code. Entry-script edits are used on the next run; watch and instruction changes are saved with the selected scenario. Breakpoints are resolved from symbols again on each run. Loading restores execution anchors as an undoable YAML edit without automatically saving the diagram. Existing `.neuro` files need no new fields.
+
+The debugger toolbar sits above the chart, grouping session actions, code stepping, and graph navigation. Icons have tooltips and accessible labels; arrow keys move between enabled actions. The toolbar remains available during an active session when the Debug pane is closed, including cancellation. Narrow views scroll the toolbar horizontally.
