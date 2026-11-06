@@ -6,7 +6,7 @@ import {stringify} from 'yaml';
 import {parseArchitecture,validateArchitecture,safeRelativePath,type Architecture} from './model';
 import {prepareDebug,debugConversation} from './codex';
 import {DebugRuntime,samePath} from './debugRuntime';
-import {emptyDebugState,resolvePythonAnchor,watchSchema,type ExecutionAnchor,type ResolvedAnchor,type DebugAction,type DebugPlan} from './debugModel';
+import {emptyDebugState,DEFAULT_DEBUG_INSTRUCTIONS,resolvePythonAnchor,watchSchema,type ExecutionAnchor,type ResolvedAnchor,type DebugAction,type DebugPlan} from './debugModel';
 import type {ModelSettings} from './modelSettings';
 import {showInCodeGroup} from './navigation';
 import {ActivityReporter} from './progress';
@@ -17,9 +17,11 @@ class UnsavedDebugSource extends Error {}
 export class DebugController implements vscode.Disposable {
   private readonly owner=randomUUID();private state=emptyDebugState();private plan?:DebugPlan;
   private entry?:vscode.Uri;private session?:vscode.DebugSession;private rootSession?:vscode.DebugSession;private ownedSessions=new Set<string>();private runtime?:DebugRuntime;
+  private entryGroup?:vscode.TabGroup;private originalTabs=new Set<vscode.Tab>();private routedFrame='';private routing=Promise.resolve();private routeTimer:ReturnType<typeof setTimeout>|undefined;
   private anchors:ResolvedAnchor[]=[];private breakpoints:vscode.SourceBreakpoint[]=[];
-  private abort?:AbortController;private disposed=false;private subscriptions:vscode.Disposable[]=[];
-  constructor(private document:vscode.TextDocument,private panel:vscode.WebviewPanel,private models:ModelSettings,private output:vscode.OutputChannel) {
+  private abort?:AbortController;private activity?:ActivityReporter;private disposed=false;private subscriptions:vscode.Disposable[]=[];
+  constructor(private document:vscode.TextDocument,private panel:vscode.WebviewPanel,private models:ModelSettings,private output:vscode.OutputChannel,private storage?:vscode.Memento) {
+    const saved=storage?.get<string>(this.instructionsKey());if(typeof saved==='string')this.state.instructions=saved;
     this.subscriptions.push(vscode.debug.registerDebugAdapterTrackerFactory('*',{createDebugAdapterTracker:session=>{
       if(session.configuration.neurologistOwner!==this.owner&&!this.ownedSessions.has(session.parentSession?.id??''))return;
       this.ownedSessions.add(session.id);if(!this.rootSession)this.rootSession=session;
@@ -50,10 +52,36 @@ export class DebugController implements vscode.Disposable {
       };
     }}),vscode.debug.onDidTerminateDebugSession(session=>{if(session.id===this.session?.id)this.ended();}),vscode.debug.onDidChangeActiveStackItem(item=>{
       if(item instanceof vscode.DebugStackFrame&&item.session.id===this.session?.id&&this.state.status==='stopped'&&this.state.frameId!==item.frameId&&this.state.stack.some(f=>f.id===item.frameId))void this.runtime?.selectFrame(item.frameId).catch(error=>this.diagnostic(String(error)));
-    }));
+    }),vscode.window.onDidChangeActiveTextEditor(editor=>{const source=this.state.stack.find(f=>f.id===this.state.frameId)?.source?.path;if(editor&&source&&this.state.status==='stopped'&&editor.viewColumn!==this.entryGroup?.viewColumn&&samePath(editor.document.uri.fsPath,source))this.routeStoppedSource(true);}),vscode.window.tabGroups.onDidChangeTabs(event=>{const source=this.state.stack.find(f=>f.id===this.state.frameId)?.source?.path;if(source&&this.state.status==='stopped'&&event.opened.some(tab=>tab.input instanceof vscode.TabInputText&&samePath(tab.input.uri.fsPath,source)))this.routeStoppedSource(true);}));
   }
+  private instructionsKey(){return 'debugInstructions:'+this.document.uri.toString();}
+  private async setInstructions(value:unknown){if(typeof value!=='string'||value.length>12000)throw new Error('Debug instructions must be at most 12,000 characters.');this.state.instructions=value.trim()||DEFAULT_DEBUG_INSTRUCTIONS;await this.storage?.update(this.instructionsKey(),this.state.instructions);this.publish();}
   private folder(){const f=vscode.workspace.getWorkspaceFolder(this.document.uri);if(!f||f.uri.scheme!=='file')throw new Error('Debugging requires a local workspace.');if(!vscode.workspace.isTrusted)throw new Error('Trust this workspace before running code with the debugger.');return f;}
-  private publish(){if(!this.disposed)void this.panel.webview.postMessage({type:'debugState',state:this.state});}
+  private publish(){if(!this.disposed){void this.panel.webview.postMessage({type:'debugState',state:this.state});this.routeStoppedSource();}}
+  private async openCode(document:vscode.TextDocument,preserveFocus=false,selection?:vscode.Range){
+    const editor=await showInCodeGroup(document,this.panel.viewColumn,{group:this.entryGroup,preserveFocus,selection});
+    this.entryGroup=vscode.window.tabGroups.all.find(group=>group.viewColumn===editor.viewColumn);return editor;
+  }
+  private routeStoppedSource(force=false){
+    if(this.disposed||this.state.status!=='stopped'){this.routedFrame='';return;}
+    const frame=this.state.stack.find(f=>f.id===this.state.frameId);if(!frame?.source?.path||!path.isAbsolute(frame.source.path))return;
+    const key=frame.id+':'+frame.source.path+':'+frame.line;
+    if(!force&&key===this.routedFrame)return;this.routedFrame=key;
+    clearTimeout(this.routeTimer);
+    this.routeTimer=setTimeout(()=>{this.routing=this.routing.then(async()=>{
+      if(this.disposed||this.state.status!=='stopped'||this.routedFrame!==key)return;
+      const uri=vscode.Uri.file(frame.source!.path!),document=await vscode.workspace.openTextDocument(uri);
+      if(this.disposed||this.state.status!=='stopped'||this.routedFrame!==key)return;
+      const line=Math.max(0,Math.min(frame.line-1,document.lineCount-1)),position=new vscode.Position(line,0);
+      await this.openCode(document,true,new vscode.Range(position,position));
+      if(this.disposed||this.state.status!=='stopped'||this.routedFrame!==key)return;
+      // VS Code can reveal a stopped source in the group that held the graph.
+      // Relocate newly opened debugger tabs only; never close pre-existing user tabs.
+      const misplaced=vscode.window.tabGroups.all.filter(group=>group!==this.entryGroup).flatMap(group=>group.tabs).filter(tab=>!this.originalTabs.has(tab)&&tab.input instanceof vscode.TabInputText&&samePath(tab.input.uri.fsPath,uri.fsPath));
+      if(misplaced.length)await vscode.window.tabGroups.close(misplaced,true);
+      if(!this.disposed)this.panel.reveal(this.panel.viewColumn,true);
+    }).catch(error=>{if(!this.disposed)this.diagnostic('Could not route debugger source: '+String(error));});},0);
+  }
   private diagnostic(message:string){if(this.disposed)return;this.state.diagnostics=[...this.state.diagnostics,message].slice(-100);this.output.appendLine('Debug: '+message);this.publish();}
   private ended(){if(this.state.status==='terminated')return;this.runtime?.terminated();this.session=undefined;vscode.debug.removeBreakpoints(this.breakpoints);this.breakpoints=[];this.publish();}
   private async within(relative:string){if(!safeRelativePath(relative))throw new Error('Debug source must be workspace-relative.');const f=this.folder(),uri=vscode.Uri.joinPath(f.uri,relative),root=await realpath(f.uri.fsPath),actual=await realpath(uri.fsPath);if(actual!==root&&!actual.startsWith(root+path.sep))throw new Error('Debug source resolves outside the workspace.');return vscode.Uri.file(actual);}
@@ -72,11 +100,12 @@ export class DebugController implements vscode.Disposable {
       return {...anchor,path:uri.fsPath,line:line+1,endLine:hit.range.end.line+1};
     }catch(error){if(error instanceof UnsavedDebugSource)throw error;this.diagnostic(`${anchor.node}: ${anchor.file} → ${anchor.symbol}: ${error instanceof Error?error.message:String(error)}`);return;}
   }
-  private options(signal:AbortSignal){const folder=this.folder(),config=vscode.workspace.getConfiguration('neurologist',folder.uri);return {cwd:folder.uri.fsPath,executable:config.get<string>('codexPath','codex'),...this.models.selection(folder),signal,log:(chunk:string)=>this.output.append(chunk),activity:new ActivityReporter(activity=>{void this.panel.webview.postMessage({type:'activity',activity});})};}
+  private options(signal:AbortSignal){const folder=this.folder(),config=vscode.workspace.getConfiguration('neurologist',folder.uri);return {cwd:folder.uri.fsPath,executable:config.get<string>('codexPath','codex'),...this.models.selection(folder),signal,log:(chunk:string)=>this.output.append(chunk),activity:this.activity};}
   private async generate(scenario:string) {
     if(this.session||this.state.status==='starting')throw new Error('Stop the current debug session before preparing another scenario.');
     const architecture=parseArchitecture(this.document.getText()),version=this.document.version;
-    const response=await prepareDebug({...this.options(this.abort!.signal),architecture,scenario});
+    const response=await prepareDebug({...this.options(this.abort!.signal),architecture,scenario,instructions:this.state.instructions,history:this.state.messages.slice(-20)});
+    if(!response.entry){this.state.messages.push({role:'assistant',content:response.reply});this.publish();return;}
     const candidate=validateArchitecture({...architecture,execution:response.anchors});
     for(const watch of response.watches)if(!candidate.nodes.some(n=>n.id===watch.node))throw new Error('Watch references an unknown node: '+watch.node);
     for(const anchor of response.anchors)await this.within(anchor.file);
@@ -94,11 +123,12 @@ export class DebugController implements vscode.Disposable {
     await (await vscode.workspace.openTextDocument(entry)).save();
     this.entry=entry;this.plan=response;this.runtime=undefined;this.state.status='prepared';this.state.entry=vscode.workspace.asRelativePath(entry,false);this.state.watches=response.watches.map(w=>({...w,stale:true}));this.state.activeNodes=[];this.state.stack=[];this.state.diagnostics=[];
     this.state.messages.push({role:'assistant',content:response.reply+'\n\nEntry script is open for review. Choose Run debug to execute it. Execution anchors are an undoable YAML edit; save the diagram when ready.'});
-    await showInCodeGroup(await vscode.workspace.openTextDocument(entry),this.panel.viewColumn);this.publish();
+    await this.openCode(await vscode.workspace.openTextDocument(entry));this.publish();
   }
   private async launch() {
     const folder=this.folder();if(!this.plan||!this.entry)throw new Error('Prepare a scenario first.');if(this.session||this.state.status==='starting')throw new Error('A debug session is already active.');
     const doc=await vscode.workspace.openTextDocument(this.entry);if(!await doc.save())throw new Error('Save the entry script before launching.');
+    if(!this.plan.entry)throw new Error('Prepare a runnable scenario first.');
     if(this.plan.entry.language==='python'&&!vscode.extensions.getExtension('ms-python.debugpy'))throw new Error('Install the Python Debugger extension (ms-python.debugpy), select your Python interpreter, then Run debug.');
     const architecture=parseArchitecture(this.document.getText());this.anchors.length=0;this.state.diagnostics=[];
     for(const anchor of architecture.execution??[]){const resolved=await this.resolve(anchor);if(resolved)this.anchors.push(resolved);}
@@ -110,6 +140,7 @@ export class DebugController implements vscode.Disposable {
       const existing=[...vscode.debug.breakpoints,...this.breakpoints].some(bp=>bp instanceof vscode.SourceBreakpoint&&bp.enabled&&bp.location.uri.toString()===location.uri.toString()&&bp.location.range.start.line===location.range.start.line);
       if(!existing)this.breakpoints.push(new vscode.SourceBreakpoint(location));
     }
+    await this.openCode(doc,true);this.originalTabs=new Set(vscode.window.tabGroups.all.flatMap(group=>group.tabs));
     vscode.debug.addBreakpoints(this.breakpoints);this.rootSession=undefined;this.ownedSessions.clear();this.state.status='starting';this.publish();
     const config:vscode.DebugConfiguration={type:this.plan.entry.language==='python'?'debugpy':'pwa-node',request:'launch',name:'Neurologist: '+architecture.title,program:this.entry.fsPath,cwd:folder.uri.fsPath,args:this.plan.entry.args,stopOnEntry:true,neurologistOwner:this.owner,console:this.plan.entry.language==='python'?'integratedTerminal':'internalConsole',...(this.plan.entry.language==='python'?{justMyCode:false,subProcess:false}:{})};
     try {if(!await vscode.debug.startDebugging(folder,config,{suppressSaveBeforeStart:true}))throw new Error('Debugger did not start. Check the selected interpreter/runtime and debugger extension.');}
@@ -120,7 +151,7 @@ export class DebugController implements vscode.Disposable {
     const runtime=this.runtime,session=this.session,architecture=parseArchitecture(this.document.getText()),tools:unknown[]=[];
     this.state.messages.push({role:'user',content:message});
     for(let i=0;i<8;i++) {
-      const response=await debugConversation({...this.options(this.abort!.signal),architecture,message,history:this.state.messages.slice(-20),context:{status:this.state.status,reason:this.state.reason,activeNodes:this.state.activeNodes,stack:this.state.stack,frameId:this.state.frameId,watches:this.state.watches},tools});
+      const response=await debugConversation({...this.options(this.abort!.signal),architecture,message,history:this.state.messages.slice(-20),context:{instructions:this.state.instructions,entry:this.state.entry,status:this.state.status,reason:this.state.reason,activeNodes:this.state.activeNodes,stack:this.state.stack,frameId:this.state.frameId,watches:this.state.watches},tools});
       this.abort!.signal.throwIfAborted();if(session.id!==this.session?.id)throw new Error('The debug session ended or changed.');
       this.state.messages.push({role:'assistant',content:response.reply});this.publish();if(!response.action)return;
       let result:unknown;try {this.checkAction(response.action,architecture);result=await runtime.action(response.action);}catch(error){result={error:error instanceof Error?error.message:String(error)};}
@@ -133,12 +164,13 @@ export class DebugController implements vscode.Disposable {
   async handle(message:any) {
     if(!String(message.type).startsWith('debug'))return;
     try {
+      if(message.type==='debugInstructions'){if(!this.state.busy)await this.setInstructions(message.instructions);return;}
       if(message.type==='debugReady'){this.publish();return;}
       if(message.type==='debugCancel'){this.abort?.abort();return;}
       if(message.type==='debugStop'){this.abort?.abort();if(this.session)await vscode.debug.stopDebugging(this.rootSession??this.session);return;}
       if(this.state.busy)throw new Error('Wait for the current debugger operation, or cancel it.');
-      this.folder();this.state.busy=true;this.abort=new AbortController();this.publish();
-      if(['debugPrepare','debugChat'].includes(message.type))void this.panel.webview.postMessage({type:'activityReset',title:message.type==='debugPrepare'?'Preparing a live exploration':'Following the live computation'});
+      this.folder();if(message.type==='debugPrepare'&&message.instructions!==undefined)await this.setInstructions(message.instructions);this.state.busy=true;this.abort=new AbortController();this.publish();
+      if(['debugPrepare','debugChat'].includes(message.type)){void this.panel.webview.postMessage({type:'activityReset',title:message.type==='debugPrepare'?'Preparing a live exploration':'Following the live computation'});this.activity=new ActivityReporter(activity=>{void this.panel.webview.postMessage({type:'activity',activity});});}
       try {
         if(message.type==='debugPrepare'){if(typeof message.message!=='string'||!message.message.trim()||message.message.length>12000)throw new Error('Describe the scenario in 1–12,000 characters.');this.state.messages.push({role:'user',content:message.message});await this.generate(message.message);}
         if(message.type==='debugRun')await this.launch();
@@ -147,9 +179,10 @@ export class DebugController implements vscode.Disposable {
         if(message.type==='debugFrame'){if(!this.runtime)throw new Error('No active debugger.');await this.runtime.selectFrame(Number(message.frame));}
         if(message.type==='debugWatch'){const watch=watchSchema.parse(message.watch),architecture=parseArchitecture(this.document.getText());if(!architecture.nodes.some(n=>n.id===watch.node))throw new Error('Unknown watch node.');if(this.runtime)await this.runtime.addWatch(watch);else {this.state.watches.push({...watch,stale:true});}}
         if(message.type==='debugUnwatch'){if(this.runtime)this.runtime.removeWatch(String(message.id));else this.state.watches=this.state.watches.filter(w=>w.id!==message.id);}
-        if(message.type==='debugEntry'&&this.entry)await showInCodeGroup(await vscode.workspace.openTextDocument(this.entry),this.panel.viewColumn);
-      }finally {this.state.busy=false;this.abort=undefined;this.state.messages=this.state.messages.slice(-60);this.publish();}
+        if(message.type==='debugEntry'&&this.entry)await this.openCode(await vscode.workspace.openTextDocument(this.entry));
+        this.activity?.finish('complete');
+      }catch(error){const cancelled=this.abort?.signal.aborted;this.activity?.finish(cancelled?'cancelled':'error');if(message.type==='debugPrepare'){const detail=error instanceof Error?error.message:String(error);this.state.messages.push({role:'assistant',content:cancelled?'Preparation was cancelled. You can add details and try again.':`Preparation failed: ${detail}\n\nYou can provide more information or ask me to try another approach.`});}throw error;}finally {this.activity=undefined;this.state.busy=false;this.abort=undefined;this.state.messages=this.state.messages.slice(-60);this.publish();}
     }catch(error){this.diagnostic(error instanceof Error?error.message:String(error));void this.panel.webview.postMessage({type:'operationError',message:error instanceof Error?error.message:String(error)});}
   }
-  dispose(){this.disposed=true;this.abort?.abort();if(this.session)void vscode.debug.stopDebugging(this.rootSession??this.session);vscode.debug.removeBreakpoints(this.breakpoints);for(const s of this.subscriptions)s.dispose();}
+  dispose(){this.disposed=true;clearTimeout(this.routeTimer);this.abort?.abort();if(this.session)void vscode.debug.stopDebugging(this.rootSession??this.session);vscode.debug.removeBreakpoints(this.breakpoints);for(const s of this.subscriptions)s.dispose();}
 }

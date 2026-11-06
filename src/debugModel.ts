@@ -3,19 +3,21 @@ export const executionAnchorSchema=z.object({node:z.string().min(1),file:z.strin
 export type ExecutionAnchor=z.infer<typeof executionAnchorSchema>;
 export const watchSchema=z.object({id:z.string().min(1).max(100),node:z.string().min(1),expression:z.string().min(1).max(2000)}).strict();
 export type DebugWatch=z.infer<typeof watchSchema>&{value?:string;error?:string;stale?:boolean};
-export const debugPlanSchema=z.object({reply:z.string().min(1).max(16000),entry:z.object({language:z.enum(['python','javascript']),code:z.string().min(1).max(100000),args:z.array(z.string()).max(100)}).strict(),anchors:z.array(executionAnchorSchema).max(1000),watches:z.array(watchSchema).max(100)}).strict();
+export const debugPlanSchema=z.object({reply:z.string().min(1).max(16000),entry:z.object({language:z.enum(['python','javascript']),code:z.string().min(1).max(100000),args:z.array(z.string()).max(100)}).strict().nullable(),anchors:z.array(executionAnchorSchema).max(1000),watches:z.array(watchSchema).max(100)}).strict();
 export type DebugPlan=z.infer<typeof debugPlanSchema>;
 export const debugActionSchema=z.object({command:z.enum(['evaluate','continue','next','stepIn','stepOut','pause','scopes','variables','stackTrace','watch','unwatch']),expression:z.string().max(4000),node:z.string().max(200),reference:z.number().int().min(0),frame:z.number().int().min(0)}).strict();
 export const debugReplySchema=z.object({reply:z.string().min(1).max(16000),action:debugActionSchema.nullable()}).strict();
 export type DebugAction=z.infer<typeof debugActionSchema>;
 export interface DebugFrame {id:number;name:string;line:number;source?:{path?:string;name?:string};}
 export interface ResolvedAnchor extends ExecutionAnchor {path:string;line:number;endLine:number;}
+export const DEFAULT_DEBUG_INSTRUCTIONS='Mock or synthesize everything that can reasonably be mocked without defeating the debugging question. Prefer deterministic synthetic inputs with shapes, dtypes and valid ranges grounded in the real code/configuration, and randomly initialized or untrained model weights. Stub datasets, remote APIs, network/storage services, logging, metrics and expensive peripheral preprocessing where practical. Keep the actual module implementations and forward/invocation path under investigation real by default; replace a target only when explicitly requested. Do not require real datasets, checkpoints or a trained model unless the scenario explicitly needs them or a dependency cannot meaningfully be mocked. Do not download, install packages or train a model. State what is mocked and how synthetic inputs are constructed; never present synthetic data, weights or inferred runtime values as real observations. Ask for clarification only when an essential code/configuration fact cannot be determined and blocks even a mocked run. Follow the user’s customized instructions and scenario when they request a different mocking policy.';
 export interface DebugViewState {
   status:'idle'|'prepared'|'starting'|'running'|'stopped'|'terminated';activeNodes:string[];watches:DebugWatch[];
   stack:DebugFrame[];frameId?:number;reason:string;diagnostics:string[];entry?:string;
+  instructions:string;
   messages:{role:'user'|'assistant'|'tool';content:string}[];busy:boolean;
 }
-export const emptyDebugState=():DebugViewState=>({status:'idle',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],messages:[],busy:false});
+export const emptyDebugState=():DebugViewState=>({status:'idle',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],instructions:DEFAULT_DEBUG_INSTRUCTIONS,messages:[],busy:false});
 
 /** Resolve qualified Python functions by indentation; never silently pick a same-name method. */
 export function resolvePythonAnchor(text:string,symbol:string,statement=''):{line:number;endLine:number}|undefined {

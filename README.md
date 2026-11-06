@@ -151,3 +151,71 @@ The host smoke test opens and closes an isolated VS Code instance using a tempor
 If an older version reports `spawn codex ENOENT`, set `neurologist.codexPath` in VS Code **User Settings** to the full CLI executable path. Version 0.1.1 adds discovery for GUI-launched VS Code, including `~/.local/bin/codex`, and reports actionable errors for missing executables. The resolved path is logged in the Neurologist Output channel.
 
 The logo is maintained as an SVG in `assets/neurologist.svg`; `npm run branding` exports the extension icon PNG using Chromium. To refresh the README screenshots from the sample UI, run `UPDATE_SCREENSHOT=1 npm run test:ui`. Screenshots use the included example diagram and scripted chat content, with no model call.
+
+## Vibe-assisted debugging
+
+Debugging defaults to **mocking what can be mocked**: synthetic inputs, untrained/randomly initialized weights, and stubs for datasets and external services. The actual modules being investigated remain real by default. Missing real data or trained checkpoints should not block an otherwise viable mocked scenario. Codex identifies what is synthetic/mocked and derives compatible shapes and ranges from the code/configuration.
+
+Expand **Debug → Instructions** to customize the policy, for example “Use my real checkpoint but mock the dataset loader.” Instructions are remembered per diagram, forwarded with scenario preparation, and included in live debugger context. **Reset defaults** restores the mocking policy. Explicit scenario requirements can request real data/weights where needed.
+
+Breakpoint source files open in the **same editor group as the generated entry script**. Neurologist stays visible in its own group while stepping, including when VS Code initially reveals a stopped source in the graph group. Newly opened misplaced debugger tabs are relocated; pre-existing user tabs are preserved.
+
+Click **Debug** in a diagram and describe the computation and configuration you want to debug, plus any real inputs or checkpoints you explicitly want to use. **Prepare scenario** asks Codex to inspect the code and create a small entry script plus execution anchors. It opens a unique `.neurologist/debug/scenario-…` script for review and adds `execution` metadata to the `.neuro` document as an undoable edit. Review/edit the script, then click **Run debug**. Save the diagram to retain its anchors. Preparation does not run project code; Run does.
+
+Python scenarios use the **Python Debugger** extension (`ms-python.debugpy`) and the interpreter selected in VS Code. JavaScript scenarios use VS Code's Node debugger. Neurologist does not write `launch.json` or hard-code a Python environment. Old diagrams without execution metadata still work; preparing a scenario discovers it. New analyses collect execution anchors where supported by code.
+
+```yaml
+execution:
+  - node: encoder
+    file: models/network.py
+    symbol: Network.forward
+    kind: invocation
+    statement: self.encoder(features)
+  - node: encoder
+    file: models/encoder.py
+    symbol: Encoder.forward
+    kind: forward
+    statement: ""
+```
+
+Anchors use workspace-relative files and qualified symbols, never saved line numbers. Launch resolves them against current saved source, optionally finding a unique statement inside the symbol. Missing/ambiguous anchors appear in Diagnostics. Distinct invocation anchors distinguish module instances sharing an implementation; shared locations highlight matching modules and produce a diagnostic. Prepare again after major refactors.
+
+The debugger stops at entry and mapped breakpoints. Corresponding module cards get a pointer and gold highlight. Use **Continue**, **Step over**, **Step into**, **Step out**, **Pause**, and the stopped-frame selector, or the normal VS Code debugger controls. Only this diagram's launched session and its children are controlled. Stop/exit removes Neurologist's breakpoints while preserving user breakpoints. Launch explicitly saves the entry script and suppresses blanket editor autosaving; unsaved source files are diagnosed rather than silently saved.
+
+Ask questions in the debugging chat, for example:
+
+- “Why does the encoder output have this shape? Inspect its inputs and configuration.”
+- “Step into the next module and explain what changed.”
+- “Watch `x.shape` on the encoder and `hidden.dtype` on the projection.”
+- “Evaluate `hidden[:2]` in this frame.”
+
+Codex receives actual debugger context and can request evaluation, scopes, variables, stack inspection, pause, continue/stepping, and graph watches. Action results feed its next decision, with up to eight actions per request. Expand tool entries to inspect actions and results. Expressions/statements execute through the debugger in the debugged process, separately from Codex's read-only exploration. Model and effort selectors apply to preparation and debugging chat.
+
+Watches appear **inside their owning React Flow cards**. Add them through chat or the **Graph watches** form. They update only in a stopped frame mapped to their module. Elsewhere they retain their last value marked stale; unavailable expressions show errors. Prefer shapes, dtypes and small slices to full tensors. Chat and watch state last for the open editor/session; anchors live in YAML and entry scripts are ordinary files. Closing the diagram stops its session. Multiprocess Python/distributed execution is not enabled by the generated launch configuration.
+
+![Debugger with a stopped module and inline shape watch](docs/debugger.png)
+
+`npm run test:debug-host` uses a real Node debugger in isolated VS Code with mocked Codex preparation/chat. Unit tests cover schema compatibility, symbol resolution, stepping, scoped watches and stale events. Browser tests exercise preparation/chat controls and inline watches. No user model or paid model call runs during these tests.
+
+## Demo walkthroughs
+
+Click **Create demo** in a diagram’s header to open Revise chat with an editable walkthrough request. Review it and press **Revise →** to generate the demo. The button does not send a request automatically. Revise chat also offers a demo creation example. Once the update is ready, use **▶ Demo** to play the walkthrough.
+
+Add a `demos` array to a `.neuro` file to author independent walkthroughs for that diagram. Each demo has a `name`, optional `description`, and nonempty `steps`; each step has an ordered `operations` list and an optional display `duration` in milliseconds (default 3000). Open **Demo** in the graph editor to select a walkthrough, navigate steps, or play and pause. Diagnostics identify missing references. You can also author or edit definitions directly in YAML.
+
+```yaml
+demos:
+  - name: Data flow
+    description: Follow the input into the encoder.
+    steps:
+      - duration: 2000
+        operations:
+          - { type: focus, target: input }
+          - { type: highlight, nodes: [input] }
+          - { type: explain, target: input, text: The waveform enters here. }
+      - operations:
+          - { type: point, target: encoder }
+          - { type: dim, nodes: [input] }
+```
+
+`focus`, `point`, and `explain` target a node or edge ID. `highlight` and `dim` accept `nodes` and `edges` ID lists. `add` accepts arrays of full node and edge objects using the normal diagram schema; `remove` accepts ID lists. Adding and removing affect later steps within the demo; presentation effects apply only to their own step. Removing a node also removes its incident edges. Each step is replayed from an isolated copy of the diagram, and exiting restores the editor view without saving temporary changes. Groups are not part of the current diagram schema.
