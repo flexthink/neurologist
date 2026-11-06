@@ -2,7 +2,7 @@
   "name": "neurologist",
   "displayName": "Neurologist",
   "description": "Explore neural architectures with Codex and interactive, source-linked graphs.",
-  "version": "0.8.0",
+  "version": "0.10.1",
   "publisher": "neurologist",
   "license": "MIT",
   "engines": {
@@ -29,7 +29,8 @@
     "test:ui": "npm run build && tsx scripts/ui-smoke.ts",
     "branding": "node scripts/branding.mjs",
     "test:present-host": "npm run build && node scripts/smoke.mjs --present",
-    "test:figure": "tsx --test test/figure.test.ts"
+    "test:figure": "tsx --test test/figure.test.ts",
+    "test:debug-host": "npm run build && node scripts/smoke.mjs --debug"
   },
   "contributes": {
     "commands": [

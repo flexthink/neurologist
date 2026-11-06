@@ -35,6 +35,49 @@ try {
   await page.goto(`http://127.0.0.1:${address.port}`);
   await page.getByRole('heading',{name:'Tiny encoder',exact:true}).waitFor({timeout:10000}).catch(async error => {await page.screenshot({path:'dist/ui-error.png'});console.error(await page.locator('body').innerText());throw error;});
   await page.locator('.react-flow__node').first().waitFor();
+  await page.getByRole('button',{name:'Debug',exact:true}).click();
+  await page.locator('.debugInstructions summary').click();
+  assert.match(await page.getByLabel('Debug instructions',{exact:true}).inputValue(),/synthetic inputs/);
+  await page.getByLabel('Debug instructions',{exact:true}).fill('Use synthetic inputs and random weights. Mock network services; keep the encoder real.');
+  await page.getByLabel('Describe the debugging scenario',{exact:true}).fill('Run one encoder inference with existing inputs');
+  await page.getByRole('button',{name:'Prepare scenario',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugPrepare'&&m.message.includes('encoder inference')&&m.instructions.includes('Mock network services'))));
+  await page.locator('.debugInstructions summary').click();
+  const debugState={status:'prepared',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],entry:'.neurologist/debug/scenario.py',messages:[{role:'assistant',content:'Entry script is ready for review.'}],busy:false};
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),debugState);
+  await page.getByRole('button',{name:'Run debug',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugRun')));
+  const stopped={...debugState,status:'stopped',reason:'breakpoint',activeNodes:['projection'],frameId:10,stack:[{id:10,name:'Encoder.forward',line:7,source:{name:'tiny_encoder.py'}}],watches:[{id:'shape',node:'projection',expression:'x.shape',value:'[2, 128]',stale:false}]};
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),stopped);
+  await page.locator('.react-flow__node.debugStopped[data-id="projection"]').waitFor();
+  await page.getByText('Paused in this module',{exact:false}).waitFor();
+  assert.equal(await page.locator('.moduleWatches').getByText('[2, 128]',{exact:true}).count(),1);
+  await page.getByLabel('Ask the debugger',{exact:true}).fill('Explain this shape and watch hidden.dtype on projection');
+  await page.getByRole('button',{name:'Ask debugger →',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugChat'&&m.message.includes('hidden.dtype'))));
+  await page.getByRole('button',{name:'Step over',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCommand'&&m.command==='next')));
+  await page.locator('.debugWatches summary').click();
+  await page.getByLabel('Watch module',{exact:true}).selectOption('projection');
+  await page.getByLabel('Watch expression',{exact:true}).fill('x.dtype');
+  await page.getByRole('button',{name:'Add graph watch',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugWatch'&&m.watch.node==='projection'&&m.watch.expression==='x.dtype')));
+  await page.getByRole('button',{name:/fit view/i}).click();
+  await page.screenshot({path:'dist/debug-preview.png'});
+  if(process.env.UPDATE_SCREENSHOT==='1')await copyFile('dist/debug-preview.png','docs/debugger.png');
+  await page.evaluate(state=>window.postMessage({type:'debugState',state:{...state,status:'running',activeNodes:[],watches:state.watches.map(w=>({...w,stale:true}))}},'*'),stopped);
+  await page.locator('.react-flow__node.debugStopped').waitFor({state:'hidden'});
+  assert.equal(await page.locator('.react-flow__node.debugStopped').count(),0);
+  await page.evaluate(state=>window.postMessage({type:'debugState',state:{...state,status:'terminated',entry:undefined}},'*'),debugState);
+  await page.getByRole('button',{name:'Hide debugger',exact:true}).click();
+  await page.getByRole('button',{name:'✦ Chat',exact:true}).click();
+  const chatRequestsBeforeDemo=await page.evaluate(()=>(window as any).messages.filter((m:any)=>m.type==='chat').length);
+  await page.getByRole('button',{name:'Create demo',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'Revise diagram',exact:true}).getAttribute('aria-pressed'),'true');
+  assert.match(await page.getByLabel('Describe your diagram revision',{exact:true}).inputValue(),/Create a step-by-step demo/);
+  assert.equal(await page.evaluate(()=>(window as any).messages.filter((m:any)=>m.type==='chat').length),chatRequestsBeforeDemo,'Create demo should prepare an editable request without sending it');
+  await page.getByLabel('Describe your diagram revision',{exact:true}).fill('');
+  await page.getByRole('button',{name:'Explain architecture',exact:true}).click();
   await page.getByLabel('Codex model',{exact:true}).selectOption('test-deep');
   await page.getByLabel('Reasoning effort',{exact:true}).selectOption('high');
   await page.getByLabel('Codex model',{exact:true}).selectOption('test-fast');
@@ -95,6 +138,45 @@ try {
   await page.getByRole('button',{name:'Collapse description',exact:true}).click();
   await page.getByRole('button',{name:'Expand description',exact:true}).click();
   await page.getByLabel('Ask Neurologist',{exact:true}).fill('');
+  // Exercise the shipped Demo Mode against the real webview bundle.
+  const demoArchitecture={...architecture,demos:[{name:'Walkthrough',steps:[
+    {duration:1000,operations:[{type:'add',nodes:[{id:'temporary',label:'Temporary demo node',kind:'',description:'',parameters:[],sources:[]}]},{type:'highlight',nodes:['temporary']},{type:'explain',target:'temporary',text:'Temporary explanation'}]},
+    {duration:1000,operations:[{type:'point',target:'temporary'}]},
+    {duration:1000,operations:[{type:'remove',nodes:['temporary']}]}]},
+    {name:'Independent demo',steps:[{operations:[{type:'dim',nodes:[architecture.nodes[0].id]}]}]}]};
+  await page.evaluate(architecture=>window.postMessage({type:'architecture',architecture},'*'),demoArchitecture);
+  await page.getByRole('button',{name:'▶ Demo',exact:true}).waitFor();
+  const beforeDemo=await page.locator('.react-flow__node').evaluateAll(nodes=>nodes.map(node=>({id:node.getAttribute('data-id'),style:node.getAttribute('style')})));
+  const messageCount=await page.evaluate(()=>(window as any).messages.length);
+  await page.getByRole('button',{name:'▶ Demo',exact:true}).click();
+  await page.getByText('Temporary explanation',{exact:true}).waitFor();
+  assert.equal(await page.locator('.react-flow__node.demoHighlight').count(),1);
+  await page.getByRole('button',{name:'Forward',exact:true}).click();
+  await page.locator('.demoPointer').waitFor();
+  assert.equal(await page.locator('.demoCallout').count(),0);
+  assert.equal(await page.locator('.react-flow__node.demoHighlight').count(),0);
+  await page.getByRole('button',{name:'Forward',exact:true}).click();
+  await page.getByText('Temporary demo node',{exact:true}).waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Back',exact:true}).click();
+  await page.getByText('Temporary demo node',{exact:true}).waitFor();
+  await page.locator('.demoPointer').waitFor();
+  await page.getByLabel('Choose step',{exact:true}).selectOption('0');
+  await page.getByText('Temporary explanation',{exact:true}).waitFor();
+  await page.getByLabel('Choose demo',{exact:true}).selectOption('1');
+  await page.getByText('Temporary demo node',{exact:true}).waitFor({state:'hidden'});
+  assert.equal(await page.locator('.react-flow__node.demoDim').count(),1);
+  await page.getByLabel('Choose demo',{exact:true}).selectOption('0');
+  await page.getByRole('button',{name:'Play',exact:true}).click();
+  await page.getByRole('button',{name:'Pause',exact:true}).click();
+  assert.equal(await page.getByLabel('Choose step',{exact:true}).inputValue(),'0');
+  await page.getByRole('button',{name:'Play',exact:true}).click();
+  await page.getByText('Temporary demo node',{exact:true}).waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'Play',exact:true}).waitFor();
+  assert.equal(await page.getByLabel('Choose step',{exact:true}).inputValue(),'2');
+  await page.getByRole('button',{name:'Exit demo',exact:true}).click();
+  assert.deepEqual(await page.locator('.react-flow__node').evaluateAll(nodes=>nodes.map(node=>({id:node.getAttribute('data-id'),style:node.getAttribute('style')}))),beforeDemo);
+  assert.deepEqual(await page.evaluate(count=>(window as any).messages.slice(count),messageCount),[],'Demo navigation must never send editor/save operations');
+  await page.evaluate(architecture=>window.postMessage({type:'architecture',architecture},'*'),architecture);
   await page.waitForTimeout(350);
   await page.screenshot({path:'dist/ui-preview.png'});
   if (process.env.UPDATE_SCREENSHOT==='1') {await mkdir('docs',{recursive:true});await copyFile('dist/ui-preview.png','docs/screenshot.png');}
@@ -247,7 +329,7 @@ target.messages.push(message);if(message.type==='ready')setTimeout(()=>window.po
   await presentation.setViewportSize({width:600,height:900});
   assert.equal(await presentation.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   assert.deepEqual(errors,[]);
-  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, and effort compatibility resets.');
+  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, effort compatibility resets, and Demo Mode navigation, transient effects, independent demos, playback, source-view restoration, debugger scenario/chat controls, stopped-module highlights, and scoped inline watches.');
 } finally {await browser.close(); server.close();}
 
 }

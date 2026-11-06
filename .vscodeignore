@@ -8,3 +8,5 @@ tsconfig.json
 esbuild.mjs
 scripts/**
 dist/*.png
+
+STATE.md

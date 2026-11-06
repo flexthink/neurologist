@@ -1,3 +1,5 @@
+export {DebugController} from './debugController';
+import {DebugController} from './debugController';
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
@@ -191,6 +193,7 @@ export function activate(context: vscode.ExtensionContext) {
       panel.webview.html = html(panel.webview);
       panels.set(document.uri.toString(), panel);
       const modelBinding=modelSettings.bind(panel.webview,()=>vscode.workspace.getWorkspaceFolder(document.uri));
+      const debuggerController=new DebugController(document,panel,modelSettings,output,context.workspaceState);
       const snapshot=pendingSnapshots.get(document.uri.toString());
       if (snapshot) {activitySnapshots.set(panel,snapshot);pendingSnapshots.delete(document.uri.toString());}
       const history:ChatTurn[] = context.workspaceState.get<ChatTurn[]>('chat:'+document.uri.toString(),[]).slice(-40);
@@ -208,6 +211,7 @@ export function activate(context: vscode.ExtensionContext) {
       const changes = vscode.workspace.onDidChangeTextDocument(event => { if (event.document.uri.toString() === document.uri.toString()) update(); });
       const messages = panel.webview.onDidReceiveMessage(async message => {
         try {
+          if (String(message.type).startsWith('debug')) {await debuggerController.handle(message);return;}
           if (message.type === 'ready') {update();void panel.webview.postMessage({type:'chatHistory',messages:history});restoreActivity(panel);}
           if (message.type === 'source') {
             const source = sourceSchema.parse(message.source);
@@ -226,7 +230,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (message.type === 'generate' && typeof message.instructions === 'string') await generate(panel,message.instructions,document);
         } catch (error) { if (!(error instanceof Error && error.name === 'AbortError')) void panel.webview.postMessage({type:'operationError',message:error instanceof Error ? error.message : String(error)}); handleError(error); }
       });
-      panel.onDidDispose(() => {modelBinding.dispose();panels.delete(document.uri.toString()); activitySnapshots.delete(panel); changes.dispose(); messages.dispose(); diagnostics.delete(document.uri);});
+      panel.onDidDispose(() => {debuggerController.dispose();modelBinding.dispose();panels.delete(document.uri.toString()); activitySnapshots.delete(panel); changes.dispose(); messages.dispose(); diagnostics.delete(document.uri);});
     }
   };
   context.subscriptions.push(vscode.window.registerCustomEditorProvider('neurologist.graph',provider,{webviewOptions:{retainContextWhenHidden:true},supportsMultipleEditorsPerDocument:false}));

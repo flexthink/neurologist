@@ -145,3 +145,56 @@ test('analysis, chat, and Present! all pass selected model and reasoning effort 
       await presentFigure({...options,architecture,previous:null,history:[],message:'',target:'paper'});
     });
 });
+
+test('chat sends a strict demos schema when revising an old diagram without demos',async()=>{
+  const {converse}=await import('../src/codex');
+  const {parseArchitecture}=await import('../src/model');
+  const {readFile}=await import('node:fs/promises');
+  const architecture=parseArchitecture(await readFile('examples/tiny-encoder.neuro','utf8'));
+  assert.equal(architecture.demos,undefined);
+  await mockCli(`const fs=require('node:fs'),args=process.argv.slice(2);
+    const schema=JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
+    function check(s){if(!s||typeof s!=='object')return;if('oneOf' in s||'allOf' in s||'exclusiveMinimum' in s)process.exit(14);if(s.type==='object'&&Object.keys(s.properties||{}).some(k=>!s.required?.includes(k)))process.exit(12);for(const v of Object.values(s)){if(Array.isArray(v))v.forEach(check);else check(v);}}
+    check(schema);
+    let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{
+      if(!prompt.includes('use [] when there are none'))process.exit(13);
+      fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({reply:'Updated.',sources:[],architecture:{...${JSON.stringify(architecture)},title:'Updated old diagram',demos:[]}}));
+    });`,async executable=>{
+      const response=await converse({...defaults,executable,signal:new AbortController().signal,architecture,history:[],message:'Rename this model',mode:'revise',selected:[]});
+      assert.equal(response.architecture?.title,'Updated old diagram');assert.deepEqual(response.architecture?.demos,[]);assert.equal(architecture.demos,undefined);
+    });
+});
+
+test('debug scenario preparation and interactive action responses use strict schemas and evidence context',async()=>{
+  const {prepareDebug,debugConversation}=await import('../src/codex');
+  const {parseArchitecture}=await import('../src/model');const {readFile}=await import('node:fs/promises');
+  const architecture=parseArchitecture(await readFile('examples/tiny-encoder.neuro','utf8'));
+  const plan={reply:'Prepared.',entry:{language:'python',code:'print("scenario")\n',args:[]},anchors:[{node:'projection',file:'examples/tiny_encoder.py',symbol:'Encoder.forward',kind:'forward',statement:''}],watches:[{id:'shape',node:'projection',expression:'x.shape'}]};
+  await mockCli(`const fs=require('node:fs'),args=process.argv.slice(2),schema=JSON.parse(fs.readFileSync(args[args.indexOf('--output-schema')+1],'utf8'));
+    function check(s){if(!s||typeof s!=='object')return;if('oneOf'in s||'exclusiveMinimum'in s)process.exit(12);if(s.type==='object'&&Object.keys(s.properties||{}).some(k=>!s.required.includes(k)))process.exit(13);for(const v of Object.values(s))if(Array.isArray(v))v.forEach(check);else check(v);}check(schema);
+    let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{
+      if(!prompt.includes('Do not modify')&&!prompt.includes('do not modify'))process.exit(14);
+      const result=schema.properties.entry?${JSON.stringify(plan)}:{reply:'Inspecting the input shape.',action:{command:'watch',expression:'x.shape',node:'projection',reference:0,frame:0}};
+      fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify(result));
+    });`,async executable=>{
+      const options={...defaults,executable,signal:new AbortController().signal,architecture};
+      assert.deepEqual(await prepareDebug({...options,scenario:'One inference pass'}),plan);
+      const response=await debugConversation({...options,message:'Watch the input shape',context:{status:'stopped',frameId:1},history:[],tools:[]});
+      assert.equal(response.action?.command,'watch');assert.equal(response.action?.node,'projection');
+    });
+});
+
+test('debug preparation defaults to mocking and accepts a replacement instruction policy',async()=>{
+  const {prepareDebug}=await import('../src/codex');const {parseArchitecture}=await import('../src/model');const {readFile}=await import('node:fs/promises');
+  const architecture=parseArchitecture(await readFile('examples/tiny-encoder.neuro','utf8'));
+  await mockCli(`const fs=require('node:fs'),args=process.argv.slice(2);let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{
+    if(!prompt.includes('Synthetic data, random weights and peripheral mocks are allowed'))process.exit(16);
+    if(prompt.includes('custom-policy-scenario')){if(!prompt.includes('Use the real checkpoint but mock the dataset loader.')||prompt.includes('Mock or synthesize everything that can reasonably'))process.exit(17);}
+    else if(!prompt.includes('Mock or synthesize everything that can reasonably')||!prompt.includes('untrained model weights'))process.exit(18);
+    fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({reply:'Ready to clarify only essential details.',entry:null,anchors:[],watches:[]}));
+  });`,async executable=>{
+    const options={...defaults,instructions:undefined,architecture,executable,signal:new AbortController().signal};
+    await prepareDebug({...options,scenario:'Default policy scenario'});
+    await prepareDebug({...options,scenario:'custom-policy-scenario',instructions:'Use the real checkpoint but mock the dataset loader.'});
+  });
+});
