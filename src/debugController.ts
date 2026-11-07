@@ -1,3 +1,4 @@
+import {visualizationSpecSchema,savedVisualizationSchema,visualizationExpression,pngDataUri,MAX_IMAGE_BYTES,PYTHON_VISUALIZATION_BRIDGE,JAVASCRIPT_VISUALIZATION_BRIDGE,type DebugVisualization} from './debugVisualization';
 import {listScenarios,saveScenario,uniqueScenarioName,type SavedScenario} from './debugScenarios';
 import {navigationSettingsSchema,detectLoop} from './debugNavigation';
 import * as vscode from 'vscode';
@@ -29,7 +30,7 @@ export class DebugController implements vscode.Disposable {
     this.subscriptions.push(vscode.debug.registerDebugAdapterTrackerFactory('*',{createDebugAdapterTracker:session=>{
       if(session.configuration.neurologistOwner!==this.owner&&!this.ownedSessions.has(session.parentSession?.id??''))return;
       this.ownedSessions.add(session.id);if(!this.rootSession)this.rootSession=session;
-      this.session=session;this.runtime=new DebugRuntime(session,this.state,this.anchors,()=>this.publish(),this.plan?.entry?.language??'python');
+      this.session=session;this.runtime=new DebugRuntime(session,this.state,this.anchors,()=>this.publish(),this.plan?.entry?.language??'python',(visual,frame,hit)=>this.renderVisualization(session,visual,frame,hit));
       const requests=new Map<number,{path:string;lines:number[]}>(),bound=new Map<number,ResolvedAnchor[]>(),pending=new Map<number,string>(),navigationIds=new Set<number>();
       return {
         onWillReceiveMessage:message=>{if(message.type==='request'&&message.command==='setBreakpoints')requests.set(message.seq,{path:message.arguments.source?.path,lines:(message.arguments.breakpoints??[]).map((b:any)=>b.line)});},
@@ -124,7 +125,7 @@ export class DebugController implements vscode.Disposable {
     const architecture=parseArchitecture(this.document.getText());validateArchitecture({...architecture,execution:saved.plan.anchors});
     const edit=new vscode.WorkspaceEdit();edit.replace(this.document.uri,new vscode.Range(this.document.positionAt(0),this.document.positionAt(this.document.getText().length)),stringify({...architecture,execution:saved.plan.anchors}));
     if(!await vscode.workspace.applyEdit(edit))throw new Error('Could not restore scenario execution anchors.');
-    this.plan=saved.plan;this.entry=entry;this.runtime=undefined;Object.assign(this.state,{status:'prepared',scenarioId:saved.id,scenarioName:saved.name,entry:saved.entry,instructions:saved.instructions,navigationSettings:saved.navigationSettings,watches:saved.watches.filter(w=>architecture.nodes.some(n=>n.id===w.node)).map(w=>({...w,stale:true})),activeNodes:[],stack:[],trace:[],detectedLoop:[],navigationResult:undefined,diagnostics:[],reason:'',messages:[{role:'user',content:saved.request},{role:'assistant',content:'Loaded '+saved.name+'. Review the entry script, then choose Run debug.'}]});
+    this.plan=saved.plan;this.entry=entry;this.runtime=undefined;Object.assign(this.state,{status:'prepared',scenarioId:saved.id,scenarioName:saved.name,entry:saved.entry,instructions:saved.instructions,navigationSettings:saved.navigationSettings,visualizations:(saved.visualizations??[]).filter(v=>architecture.nodes.some(n=>n.id===v.node)).map(v=>({...v,stale:true})),watches:saved.watches.filter(w=>architecture.nodes.some(n=>n.id===w.node)).map(w=>({...w,stale:true})),activeNodes:[],stack:[],trace:[],detectedLoop:[],navigationResult:undefined,diagnostics:[],reason:'',messages:[{role:'user',content:saved.request},{role:'assistant',content:'Loaded '+saved.name+'. Review the entry script, then choose Run debug.'}]});
     await this.refreshScenarios();await this.openCode(await vscode.workspace.openTextDocument(entry));this.publish();void this.panel.webview.postMessage({type:'debugOpen'});if(run)await this.launch();
     }finally{this.state.busy=false;this.publish();}
   }
@@ -136,7 +137,7 @@ export class DebugController implements vscode.Disposable {
   }
   private async updateSavedScenario(){
     if(!this.state.scenarioId)return;const folder=this.folder(),saved=(await listScenarios(folder)).find(s=>s.id===this.state.scenarioId);if(!saved)return;
-    saved.instructions=this.state.instructions;saved.navigationSettings=this.state.navigationSettings;saved.watches=this.state.watches.map(({id,node,expression})=>({id,node,expression}));await saveScenario(folder,saved);
+    saved.visualizations=(this.state.visualizations??[]).map(v=>savedVisualizationSchema.parse({id:v.id,title:v.title,node:v.node,language:v.language,function:v.function,context:v.context,condition:v.condition,anchor:v.anchor,file:v.file}));saved.instructions=this.state.instructions;saved.navigationSettings=this.state.navigationSettings;saved.watches=this.state.watches.map(({id,node,expression})=>({id,node,expression}));await saveScenario(folder,saved);
   }
   private async persistScenario(request:string){
     if(!this.entry||!this.plan?.entry)return;const folder=this.folder(),all=await listScenarios(folder),id=randomUUID();
@@ -164,19 +165,19 @@ export class DebugController implements vscode.Disposable {
     if(!await vscode.workspace.applyEdit(edit))throw new Error('Could not create the entry script and execution anchors.');
     await (await vscode.workspace.openTextDocument(entry)).save();
     this.entry=entry;this.plan=response;this.runtime=undefined;this.state.status='prepared';this.state.entry=vscode.workspace.asRelativePath(entry,false);this.state.watches=response.watches.map(w=>({...w,stale:true}));this.state.activeNodes=[];this.state.stack=[];this.state.diagnostics=[];
-    await this.persistScenario(scenario);
+    this.state.visualizations=[];await this.persistScenario(scenario);
     this.state.messages.push({role:'assistant',content:response.reply+'\n\nEntry script is open for review. Choose Run debug to execute it. Execution anchors are an undoable YAML edit; save the diagram when ready.'});
     await this.openCode(await vscode.workspace.openTextDocument(entry));this.publish();
   }
   private async launch() {
     const folder=this.folder();if(!this.plan||!this.entry)throw new Error('Prepare a scenario first.');if(this.session||this.state.status==='starting')throw new Error('A debug session is already active.');
     const saved=(await listScenarios(folder)).find(s=>s.id===this.state.scenarioId);
-    if(saved){saved.instructions=this.state.instructions;saved.navigationSettings=this.state.navigationSettings;saved.watches=this.state.watches.map(({id,node,expression})=>({id,node,expression}));saved.plan.anchors=parseArchitecture(this.document.getText()).execution??[];await saveScenario(folder,saved);}
+    if(saved){saved.visualizations=(this.state.visualizations??[]).map(v=>savedVisualizationSchema.parse({id:v.id,title:v.title,node:v.node,language:v.language,function:v.function,context:v.context,condition:v.condition,anchor:v.anchor,file:v.file}));saved.instructions=this.state.instructions;saved.navigationSettings=this.state.navigationSettings;saved.watches=this.state.watches.map(({id,node,expression})=>({id,node,expression}));saved.plan.anchors=parseArchitecture(this.document.getText()).execution??[];await saveScenario(folder,saved);}
     const doc=await vscode.workspace.openTextDocument(this.entry);if(!await doc.save())throw new Error('Save the entry script before launching.');
     if(!this.plan.entry)throw new Error('Prepare a runnable scenario first.');
     if(this.plan.entry.language==='python'&&!vscode.extensions.getExtension('ms-python.debugpy'))throw new Error('Install the Python Debugger extension (ms-python.debugpy), select your Python interpreter, then Run debug.');
     const architecture=parseArchitecture(this.document.getText());this.anchors.length=0;this.state.diagnostics=[];
-    for(const anchor of architecture.execution??[]){const resolved=await this.resolve(anchor);if(resolved)this.anchors.push(resolved);}
+    for(const anchor of [...(architecture.execution??[]),...(this.state.visualizations??[]).flatMap(v=>v.anchor?[v.anchor]:[])]){const resolved=await this.resolve(anchor);if(resolved)this.anchors.push(resolved);}
     const locations=new Map<string,string[]>();for(const anchor of this.anchors){const key=anchor.path+':'+anchor.line;locations.set(key,[...(locations.get(key)??[]),anchor.node]);}
     for(const nodes of locations.values())if(new Set(nodes).size>1)this.diagnostic('Shared execution location: '+nodes.join(', ')+'. Add distinct invocation anchors to disambiguate module instances.');
     vscode.debug.removeBreakpoints(this.breakpoints);this.breakpoints=[];
@@ -192,19 +193,51 @@ export class DebugController implements vscode.Disposable {
     catch(error){this.state.status='prepared';vscode.debug.removeBreakpoints(this.breakpoints);this.breakpoints=[];this.publish();throw error;}
   }
   private async conversation(message:string) {
-    if(!this.runtime||!this.session)throw new Error('Run a scenario before chatting with the live debugger.');
+    if(!this.plan||!this.state.scenarioId)throw new Error('Prepare or load a scenario before adding a visualization.');
     const runtime=this.runtime,session=this.session,architecture=parseArchitecture(this.document.getText()),tools:unknown[]=[];
     this.state.messages.push({role:'user',content:message});
     for(let i=0;i<8;i++) {
-      const response=await debugConversation({...this.options(this.abort!.signal),architecture,message,history:this.state.messages.slice(-20),context:{instructions:this.state.instructions,entry:this.state.entry,status:this.state.status,reason:this.state.reason,activeNodes:this.state.activeNodes,stack:this.state.stack,frameId:this.state.frameId,watches:this.state.watches,observedPath:this.state.trace.slice(-64),detectedLoop:this.state.detectedLoop,navigationSettings:this.state.navigationSettings,lastNavigation:this.state.navigationResult,mappedNodes:[...new Set(this.anchors.map(a=>a.node))]},tools});
-      this.abort!.signal.throwIfAborted();if(session.id!==this.session?.id)throw new Error('The debug session ended or changed.');
+      const response=await debugConversation({...this.options(this.abort!.signal),architecture,message,history:this.state.messages.slice(-20),context:{instructions:this.state.instructions,entry:this.state.entry,status:this.state.status,reason:this.state.reason,activeNodes:this.state.activeNodes,stack:this.state.stack,frameId:this.state.frameId,watches:this.state.watches,visualizations:await this.visualizationContext(),scenarioId:this.state.scenarioId,language:this.plan.entry?.language,observedPath:this.state.trace.slice(-64),detectedLoop:this.state.detectedLoop,navigationSettings:this.state.navigationSettings,lastNavigation:this.state.navigationResult,mappedNodes:[...new Set(this.anchors.map(a=>a.node))]},tools});
+      this.abort!.signal.throwIfAborted();if(session?.id!==this.session?.id)throw new Error('The debug session ended or changed.');
       this.state.messages.push({role:'assistant',content:response.reply});this.publish();if(!response.action)return;
-      let result:unknown;try {this.checkAction(response.action,architecture);result=await runtime.action(response.action,this.abort!.signal);}catch(error){result={error:error instanceof Error?error.message:String(error)};}
+      let result:unknown;try {this.checkAction(response.action,architecture);if(response.action.command==='visualize')result=await this.installVisualization(response.action.expression);else if(response.action.command==='removeVisualization'){this.state.visualizations=this.state.visualizations?.filter(v=>v.id!==response.action!.expression);this.pruneCaptureAnchors();await this.updateSavedScenario();result={removed:response.action.expression};}else{if(!runtime)throw new Error('Run the scenario before using live debugger actions.');result=await runtime.action(response.action,this.abort!.signal);}}catch(error){result={error:error instanceof Error?error.message:String(error)};}
       this.abort!.signal.throwIfAborted();const tool={action:response.action,result:JSON.stringify(result).slice(0,18000)};tools.push(tool);this.state.messages.push({role:'tool',content:JSON.stringify(tool)});this.publish();
       if(['leap','escapeLoop','runTo','runUntil'].includes(response.action.command)&&result&&typeof result==='object'&&'reason'in result&&['user-stop','cancelled','timeout','limit','error'].includes(String(result.reason))){this.state.messages.push({role:'assistant',content:String((result as {message?:string}).message??'Navigation paused.')});this.publish();return;}
       if(this.state.status==='terminated'){this.state.messages.push({role:'assistant',content:'The debug session ended. The last debugger result is shown above; Run debug starts the scenario again.'});this.publish();return;}
     }
     this.state.messages.push({role:'assistant',content:'Reached the eight-action limit for this request. Ask a follow-up to continue.'});this.publish();
+  }
+  private pruneCaptureAnchors(){
+    const key=(a:ExecutionAnchor)=>JSON.stringify([a.node,a.file,a.symbol,a.kind,a.statement??'']);
+    const desired=new Set([...(parseArchitecture(this.document.getText()).execution??[]),...(this.state.visualizations??[]).flatMap(v=>v.anchor?[v.anchor]:[])].map(key));
+    const kept=this.anchors.filter(a=>desired.has(key(a)));this.anchors.splice(0,this.anchors.length,...kept);
+    const obsolete=this.breakpoints.filter(bp=>!this.anchors.some(a=>this.sameSource(bp.location.uri.fsPath,a.path)&&bp.location.range.start.line===a.line-1));
+    vscode.debug.removeBreakpoints(obsolete);this.breakpoints=this.breakpoints.filter(bp=>!obsolete.includes(bp));
+  }
+  private async visualizationContext(){return Promise.all((this.state.visualizations??[]).map(async v=>{let code='';try{const uri=await this.within(v.file);code=(await vscode.workspace.openTextDocument(uri)).getText().slice(0,100000);}catch{}return {...v,image:undefined,code};}));}
+  private async renderVisualization(session:vscode.DebugSession,visual:DebugVisualization,frameId:number,hit:number){
+    const frame=this.state.stack.find(f=>f.id===frameId);if(visual.anchor){const bound=this.anchors.find(a=>a.node===visual.node&&a.file===visual.anchor!.file&&a.symbol===visual.anchor!.symbol&&a.statement===visual.anchor!.statement);if(!bound||!frame?.source?.path||!this.sameSource(bound.path,frame.source.path)||bound.line!==frame.line)return;}
+    const evaluate=async(expression:string)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([Promise.resolve(session.customRequest('evaluate',{expression,frameId,context:'repl'})),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Visualization evaluation timed out. Stop the debugger if the sidecar is still executing.')),10000);})]);}finally{clearTimeout(timer);}};
+    if(visual.condition.trim()){const result=await evaluate(visual.language==='python'?`bool(${visual.condition})`:`Boolean(${visual.condition})`);if(['False','false'].includes(result.result))return;if(!['True','true'].includes(result.result))throw new Error('Visualization condition did not return a boolean.');}
+    const file=await this.within(visual.file),source=await vscode.workspace.openTextDocument(file);if(source.isDirty)throw new Error('Save the sidecar before refreshing this visualization.');
+    const output=vscode.Uri.joinPath(this.folder().uri,'.neurologist','debug',`image-${this.owner}-${randomUUID()}.png`);
+    try{await evaluate(visualizationExpression(visual,file.fsPath,output.fsPath,hit,this.state.scenarioId!));await this.within(vscode.workspace.asRelativePath(output,false));const stat=await vscode.workspace.fs.stat(output);if(stat.size>MAX_IMAGE_BYTES)throw new Error('Visualization exceeds the 4 MB image limit.');return pngDataUri(await vscode.workspace.fs.readFile(output));}
+    finally{try{await vscode.workspace.fs.delete(output);}catch{}}
+  }
+  private async installVisualization(expression:string){
+    const spec=visualizationSpecSchema.parse(JSON.parse(expression));if(!this.state.scenarioId||!this.plan?.entry)throw new Error('Prepare a scenario first.');
+    if(spec.language!==this.plan.entry.language)throw new Error('Sidecar language must match the scenario.');
+    const architecture=parseArchitecture(this.document.getText());if(!architecture.nodes.some(n=>n.id===spec.node))throw new Error('Visualization references an unknown graph node.');if(spec.anchor&&spec.anchor.node!==spec.node)throw new Error('Capture anchor must belong to the visualization node.');
+    const previous=this.state.visualizations?.find(v=>v.id===spec.id);if(!previous&&(this.state.visualizations?.length??0)>=20)throw new Error('At most 20 visualizations per scenario.');
+    const resolved=spec.anchor&&this.session?await this.resolve(spec.anchor):undefined;if(spec.anchor&&this.session&&!resolved)throw new Error('Could not resolve the visualization capture anchor.');
+    const folder=this.folder(),file=previous?.file??`.neurologist/debug/visual-${this.state.scenarioId}-${spec.id}-${randomUUID()}.${spec.language==='python'?'py':'cjs'}`,uri=vscode.Uri.joinPath(folder.uri,file);
+    // The scenario directory and any preexisting target must resolve within the workspace.
+    await this.within('.neurologist/debug');try{await this.within(file);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+    const open=vscode.workspace.textDocuments.find(d=>this.sameSource(d.uri.fsPath,uri.fsPath));if(open?.isDirty)throw new Error('Save your sidecar edits before asking to revise it.');
+    const edit=new vscode.WorkspaceEdit();if(previous){const doc=await vscode.workspace.openTextDocument(uri);edit.replace(uri,new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),spec.code);}else{edit.createFile(uri,{overwrite:false});edit.insert(uri,new vscode.Position(0,0),spec.code);}if(!await vscode.workspace.applyEdit(edit))throw new Error('Could not write the visualization sidecar.');await(await vscode.workspace.openTextDocument(uri)).save();
+    const bridgeName=spec.language==='python'?'neurologist_visualization_bridge.py':'neurologist_visualization_bridge.cjs',bridge=vscode.Uri.joinPath(folder.uri,'.neurologist/debug',bridgeName);try{await this.within('.neurologist/debug/'+bridgeName);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}await vscode.workspace.fs.writeFile(bridge,Buffer.from(spec.language==='python'?PYTHON_VISUALIZATION_BRIDGE:JAVASCRIPT_VISUALIZATION_BRIDGE));
+    const {code,...definition}=spec;const visual:DebugVisualization={...definition,file,stale:true};this.state.visualizations=[...(this.state.visualizations??[]).filter(v=>v.id!==spec.id),visual];if(resolved){this.anchors.push(resolved);const location=new vscode.Location(vscode.Uri.file(resolved.path),new vscode.Position(resolved.line-1,0));if(!vscode.debug.breakpoints.some(bp=>bp instanceof vscode.SourceBreakpoint&&bp.enabled&&this.sameSource(bp.location.uri.fsPath,resolved.path)&&bp.location.range.start.line===resolved.line-1)){const bp=new vscode.SourceBreakpoint(location);this.breakpoints.push(bp);vscode.debug.addBreakpoints([bp]);}}this.pruneCaptureAnchors();await this.updateSavedScenario();await this.openCode(await vscode.workspace.openTextDocument(uri),true);this.publish();await this.runtime?.refreshVisualizations(undefined,spec.id);
+    return {id:spec.id,title:spec.title,file,imageReady:!!visual.image,error:visual.error??null,status:visual.image?'captured':'Waiting for a matching stopped frame and available context'};
   }
   private checkAction(action:DebugAction,architecture:Architecture) {
     if(action.command==='runTo'||action.command==='runUntil'){
@@ -233,6 +266,9 @@ export class DebugController implements vscode.Disposable {
         if(message.type==='debugFrame'){if(!this.runtime)throw new Error('No active debugger.');await this.runtime.selectFrame(Number(message.frame));}
         if(message.type==='debugWatch'){const watch=watchSchema.parse(message.watch),architecture=parseArchitecture(this.document.getText());if(!architecture.nodes.some(n=>n.id===watch.node))throw new Error('Unknown watch node.');if(this.runtime)await this.runtime.addWatch(watch);else {this.state.watches.push({...watch,stale:true});}}
         if(message.type==='debugUnwatch'){if(this.runtime)this.runtime.removeWatch(String(message.id));else this.state.watches=this.state.watches.filter(w=>w.id!==message.id);}
+        if(message.type==='debugVisualizationRemove'){this.state.visualizations=this.state.visualizations?.filter(v=>v.id!==message.id);this.pruneCaptureAnchors();await this.updateSavedScenario();}
+        if(message.type==='debugVisualizationRefresh'){if(!this.runtime)throw new Error('Run and pause the scenario before refreshing.');await this.runtime.refreshVisualizations(undefined,String(message.id));}
+        if(message.type==='debugVisualizationSource'){const visual=this.state.visualizations?.find(v=>v.id===message.id);if(visual)await this.openCode(await vscode.workspace.openTextDocument(await this.within(visual.file)));}
         if(message.type==='debugEntry'&&this.entry)await this.openCode(await vscode.workspace.openTextDocument(this.entry));
         if(['debugWatch','debugUnwatch','debugChat','debugRun'].includes(message.type))await this.updateSavedScenario();
         this.activity?.finish('complete');

@@ -1,3 +1,4 @@
+import type {DebugVisualization} from './debugVisualization';
 import {detectLoop,navigateGraph,type GraphStop,type NavigationKind} from './debugNavigation';
 import type {DebugAction,DebugFrame,DebugViewState,DebugWatch,ResolvedAnchor} from './debugModel';
 export interface DebugPort {customRequest(command:string,args?:unknown):Thenable<any>|Promise<any>;}
@@ -5,12 +6,12 @@ const clipped=(value:unknown)=>String(value??'').slice(0,6000);
 /** DAP operations for one owned debug session, independent of VS Code/editor state. */
 export class DebugRuntime {
   private stopSequence=0;private graphStop?:GraphStop;private stopListeners=new Set<(stop:GraphStop)=>void>();private navigationAbort?:AbortController;
-  private watchId=0;
+  private watchId=0;private visualizationHits=new Map<string,number>();
   private epoch=0;private thread?:number;private waiters=new Set<()=>void>();
-  constructor(private port:DebugPort,readonly state:DebugViewState,private anchors:ResolvedAnchor[],private changed:()=>void,private language:'python'|'javascript'='python') {}
+  constructor(private port:DebugPort,readonly state:DebugViewState,private anchors:ResolvedAnchor[],private changed:()=>void,private language:'python'|'javascript'='python',private renderVisualization?:(visual:DebugVisualization,frameId:number,hit:number)=>Promise<string|undefined>) {}
   private emit(){this.changed();}
-  continued() {this.epoch++;this.state.status='running';this.state.activeNodes=[];this.state.stack=[];this.state.frameId=undefined;for(const w of this.state.watches)w.stale=true;this.emit();}
-  terminated(){this.epoch++;this.state.status='terminated';this.state.activeNodes=[];this.state.stack=[];this.state.frameId=undefined;for(const w of this.state.watches)w.stale=true;this.graphStop={sequence:++this.stopSequence,nodes:[],reason:'terminated',skippable:false};for(const listener of this.stopListeners)listener(this.graphStop);for(const wake of this.waiters)wake();this.emit();}
+  continued() {this.epoch++;this.state.status='running';this.state.activeNodes=[];this.state.stack=[];this.state.frameId=undefined;for(const w of this.state.watches)w.stale=true;for(const v of this.state.visualizations??[])v.stale=true;this.emit();}
+  terminated(){this.epoch++;this.state.status='terminated';this.state.activeNodes=[];this.state.stack=[];this.state.frameId=undefined;for(const w of this.state.watches)w.stale=true;for(const v of this.state.visualizations??[])v.stale=true;this.graphStop={sequence:++this.stopSequence,nodes:[],reason:'terminated',skippable:false};for(const listener of this.stopListeners)listener(this.graphStop);for(const wake of this.waiters)wake();this.emit();}
   async stopped(threadId?:number,reason='breakpoint',canSkip:(frame?:DebugFrame)=>boolean=()=>false) {
     const epoch=++this.epoch;this.state.status='stopped';this.state.reason=reason;this.state.activeNodes=[];this.state.stack=[];this.state.frameId=undefined;this.emit();
     try {
@@ -21,6 +22,7 @@ export class DebugRuntime {
       this.state.frameId=this.state.stack[0]?.id;
       const frame=this.state.stack[0];
       this.state.activeNodes=this.nodesForFrame(frame);
+      await this.refreshVisualizations(epoch);if(epoch!==this.epoch)return;
       this.recordStop(reason,canSkip(frame));this.emit();
       await this.refreshWatches(epoch);
     } catch(error) {if(epoch===this.epoch){this.recordStop(reason,false);this.state.diagnostics.push(clipped(error instanceof Error?error.message:error));}}
@@ -61,7 +63,7 @@ export class DebugRuntime {
       this.state.navigationResult=result;return result;
     }finally{signal.removeEventListener('abort',abort);this.navigationAbort=undefined;this.state.navigation=undefined;this.emit();}
   }
-  async selectFrame(id:number) {if(!this.state.stack.some(f=>f.id===id))throw new Error('Unknown stack frame.');this.state.frameId=id;this.state.activeNodes=this.nodesForFrame(this.state.stack.find(f=>f.id===id));await this.refreshWatches(++this.epoch);this.emit();}
+  async selectFrame(id:number) {if(!this.state.stack.some(f=>f.id===id))throw new Error('Unknown stack frame.');this.state.frameId=id;this.state.activeNodes=this.nodesForFrame(this.state.stack.find(f=>f.id===id));const epoch=++this.epoch;await this.refreshWatches(epoch);await this.refreshVisualizations(epoch);this.emit();}
   async addWatch(watch:DebugWatch) {const existing=this.state.watches.find(w=>w.id===watch.id);if(existing)Object.assign(existing,watch);else {if(this.state.watches.length>=100)throw new Error('At most 100 graph watches are supported.');this.state.watches.push({...watch,stale:true});}if(this.state.status==='stopped')await this.refreshWatches(this.epoch);this.emit();}
   removeWatch(id:string){this.state.watches=this.state.watches.filter(w=>w.id!==id);this.emit();}
   private nodesForFrame(frame?:DebugFrame):string[] {
@@ -77,6 +79,21 @@ export class DebugRuntime {
       if(!this.state.activeNodes.includes(watch.node)){watch.stale=true;continue;}
       try {const result=await this.port.customRequest('evaluate',{expression:watch.expression,frameId:this.state.frameId,context:'watch'});if(epoch!==this.epoch)return;watch.value=clipped(result.result);watch.error=undefined;watch.stale=false;}
       catch(error){if(epoch!==this.epoch)return;watch.error=clipped(error instanceof Error?error.message:error);watch.stale=false;}
+    }
+  }
+  async refreshVisualizations(epoch=this.epoch,only?:string){
+    if(!this.renderVisualization||this.state.status!=='stopped'||this.state.frameId===undefined)return;
+    const frameId=this.state.frameId;
+    for(const visual of this.state.visualizations??[]){
+      if(only&&visual.id!==only)continue;
+      if(!this.state.activeNodes.includes(visual.node)){visual.stale=true;continue;}
+      const hit=(this.visualizationHits.get(visual.id)??0)+1;this.visualizationHits.set(visual.id,hit);
+      visual.rendering=true;this.emit();
+      try{const image=await this.renderVisualization(visual,frameId,hit);if(epoch!==this.epoch)return;
+        if(image){visual.image=image;visual.error=undefined;visual.stale=false;visual.capturedAt=new Date().toISOString();}else{visual.stale=true;}
+      }catch(error){if(epoch!==this.epoch)return;visual.error=clipped(error instanceof Error?error.message:error);visual.stale=true;}
+      finally{visual.rendering=false;}
+      this.emit();
     }
   }
   async action(action:DebugAction,signal:AbortSignal=new AbortController().signal):Promise<unknown> {

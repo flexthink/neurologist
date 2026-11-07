@@ -2,7 +2,7 @@
   "name": "neurologist",
   "displayName": "Neurologist",
   "description": "Explore neural architectures with Codex and interactive, source-linked graphs.",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "publisher": "neurologist",
   "license": "MIT",
   "engines": {

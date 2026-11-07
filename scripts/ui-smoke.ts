@@ -93,6 +93,27 @@ try {
   assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugCancelNavigation')));
   await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),stopped);
 
+  const image=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=384;canvas.height=280;const context=canvas.getContext('2d')!;context.fillStyle='#f8fafc';context.fillRect(0,0,384,280);context.font='13px sans-serif';context.fillStyle='#263544';context.fillText('Illustrative attention weights',25,23);for(let row=0;row<8;row++)for(let col=0;col<8;col++){const value=col<=row?Math.exp(-Math.abs(row-col)/2):0;context.fillStyle=`rgb(${Math.round(240-210*value)},${Math.round(245-100*value)},${Math.round(252-65*value)})`;context.fillRect(60+col*29,40+row*25,28,24);}context.fillStyle='#263544';context.fillText('Key token →',140,267);context.save();context.translate(25,195);context.rotate(-Math.PI/2);context.fillText('Query token →',0,0);context.restore();return canvas.toDataURL('image/png');});
+  const visual={id:'attention',title:'Layer 4 attention matrix',node:'projection',language:'python',function:'plot',context:[],condition:'',anchor:null,file:'.neurologist/debug/visual-attention.py',image,stale:false};
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),{...stopped,visualizations:[visual]});
+  const visualCard=page.getByRole('article',{name:'Visualization: Layer 4 attention matrix',exact:true});
+  await visualCard.waitFor();assert.equal(await visualCard.getByRole('img',{name:'Layer 4 attention matrix',exact:true}).count(),1);
+  await page.getByRole('button',{name:/fit view/i}).click();
+  await visualCard.getByRole('button',{name:'Sidecar',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugVisualizationSource'&&m.id==='attention')));
+  await visualCard.getByRole('button',{name:'Refresh',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugVisualizationRefresh'&&m.id==='attention')));
+  await page.getByRole('button',{name:/fit view/i}).click();
+  await page.screenshot({path:'dist/visualization-preview.png'});
+  if(process.env.UPDATE_SCREENSHOT==='1')await copyFile('dist/visualization-preview.png','docs/visualizations.png');
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),{...stopped,visualizations:[{...visual,stale:true,error:'attention is unavailable in this frame'}]});
+  await visualCard.getByText('Capture unavailable',{exact:true}).waitFor();
+  assert.equal(await visualCard.locator('.visualizationStatus').innerText(),'Capture unavailable');
+  assert.equal(await visualCard.getByText('attention is unavailable in this frame',{exact:true}).count(),1);
+  await visualCard.getByRole('button',{name:'Remove visualization Layer 4 attention matrix',exact:true}).click();
+  assert.ok(await page.evaluate(()=>(window as any).messages.some((m:any)=>m.type==='debugVisualizationRemove'&&m.id==='attention')));
+  await page.evaluate(state=>window.postMessage({type:'debugState',state},'*'),stopped);
+  await visualCard.waitFor({state:'hidden'});
   await page.locator('.debugWatches summary').click();
   await page.getByLabel('Watch module',{exact:true}).selectOption('projection');
   await page.getByLabel('Watch expression',{exact:true}).fill('x.dtype');
@@ -365,7 +386,7 @@ target.messages.push(message);if(message.type==='ready')setTimeout(()=>window.po
   await presentation.setViewportSize({width:600,height:900});
   assert.equal(await presentation.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
   assert.deepEqual(errors,[]);
-  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, effort compatibility resets, and Demo Mode navigation, transient effects, independent demos, playback, source-view restoration, debugger scenario/chat controls, stopped-module highlights, scoped inline watches, Leap/Escape controls, navigation limits, and interruption controls.');
+  console.log('UI SMOKE PASSED: graph, source link messages, instructions, regeneration, search, responsive layout, invalid YAML state, expandable activity, cancellation, Explain/Revise/Regenerate chat, preserved Analyze instructions, no diagram header form, safe Markdown, collapsible description, sidebar instructions and workspace selection, Present! draft preview, refinements, PNG copy, SVG/PNG export, horizontal/vertical figure scrolling, zoom controls and modifier-wheel zoom, reference-style repeat frames and detailed SVG image copying, mouse-drag panning on both axes and release outside the viewport, collapsed caption disclosure, model/effort selectors on every surface, effort compatibility resets, and Demo Mode navigation, transient effects, independent demos, playback, source-view restoration, debugger scenario/chat controls, stopped-module highlights, scoped inline watches, Leap/Escape controls, navigation limits, interruption controls, scenario visualization cards, image/error states, sidecar source/refresh/removal actions.');
 } finally {await browser.close(); server.close();}
 
 }

@@ -245,3 +245,18 @@ Debugging scenarios are reusable. Codex suggests a descriptive name when prepari
 Scenario metadata is stored in `.neurologist/debug/<id>.scenario.json` alongside the editable entry scripts. Keep both files to share or reuse a scenario after restarting VS Code. Entry-script edits are used on the next run; watch and instruction changes are saved with the selected scenario. Breakpoints are resolved from symbols again on each run. Loading restores execution anchors as an undoable YAML edit without automatically saving the diagram. Existing `.neuro` files need no new fields.
 
 The debugger toolbar sits above the chart, grouping session actions, code stepping, and graph navigation. Icons have tooltips and accessible labels; arrow keys move between enabled actions. The toolbar remains available during an active session when the Debug pane is closed, including cancellation. Narrow views scroll the toolbar horizontally.
+
+
+You can request live visualizations in the **debugging chat**, for example:
+
+> Visualize the attention matrix for the 4th Transformer layer.
+
+Prepare or load a scenario first, then use **Visualize a tensor…** or describe the plot directly. Codex writes a scenario-owned Python or JavaScript sidecar with a named image function, context bindings and an optional capture condition/breakpoint. The function runs inside the debuggee with real objects from the stopped frame, including temporary tensors and a real layer index when available. Capture breakpoints use file/symbol/statement anchors, resolve again on each run, and stop before the selected statement; the assistant must choose a point after the required tensor is computed. When fused attention does not expose weights, the assistant should explain that and prepare an appropriate computation path rather than inventing weights.
+
+Each visualization appears as a titled, draggable React Flow card connected to its module. New cards are brought into view. Cards update at matching stops and offer **Refresh**, **Sidecar** (open the editable function), and Remove. Ask follow-ups such as “show head 2 only” or “use a logarithmic color scale” to revise the same sidecar. Unavailable values and rendering failures appear on the card; captures from an earlier stop are marked stale.
+
+![Illustrative live visualization card connected to its module](docs/visualizations.png)
+
+The sidecar, context bindings, capture condition and anchor belong to the scenario’s metadata in `.neurologist/debug/`. Loading another scenario switches its visualization set; reopening a saved scenario restores its cards and capture setup. Images are runtime captures, not stored tensor snapshots. Keep the scenario metadata, entry script, sidecars and generated visualization bridge together when sharing a scenario. Older scenarios without visualizations still load.
+
+Sidecar functions are synchronous: Python uses `def plot(context, output_path)`; JavaScript exports `plot(context, output_path)`. They write a PNG to the supplied output path. `context` contains named live-value bindings plus `__neurologist` metadata (`scenario`, `node`, and a matching-stop `hit` counter). Module globals can retain small counters/summaries across captures; a hit count alone does not prove a Transformer layer index. Python plots should use installed matplotlib with the Agg backend, detach/copy tensor summaries to CPU and close figures. Existing packages are used without automatic installation. Images are limited to 4 MB and 4096 × 4096 pixels (16 megapixels), with at most 20 visualization cards per scenario. Evaluation waits are bounded; if arbitrary sidecar code remains stuck inside the debuggee, use **Stop** to end the session.

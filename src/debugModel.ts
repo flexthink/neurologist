@@ -1,3 +1,4 @@
+import type {DebugVisualization} from './debugVisualization';
 import {DEFAULT_NAVIGATION_SETTINGS,type NavigationSettings,type NavigationProgress,type NavigationResult} from './debugNavigation';
 import {z} from 'zod';
 export const executionAnchorSchema=z.object({node:z.string().min(1),file:z.string().min(1),symbol:z.string().min(1),kind:z.enum(['forward','invocation']),statement:z.string().default('')}).strict();
@@ -7,7 +8,7 @@ export type DebugWatch=z.infer<typeof watchSchema>&{value?:string;error?:string;
 export const debugPlanSchema=z.object({name:z.string().min(1).max(120).optional(),reply:z.string().min(1).max(16000),entry:z.object({language:z.enum(['python','javascript']),code:z.string().min(1).max(100000),args:z.array(z.string()).max(100)}).strict().nullable(),anchors:z.array(executionAnchorSchema).max(1000),watches:z.array(watchSchema).max(100)}).strict();
 export const debugPlanOutputSchema=debugPlanSchema.extend({name:z.string().min(1).max(120)});
 export type DebugPlan=z.infer<typeof debugPlanSchema>;
-export const debugActionSchema=z.object({command:z.enum(['evaluate','continue','next','stepIn','stepOut','pause','scopes','variables','stackTrace','watch','unwatch','leap','escapeLoop','runTo','runUntil']),expression:z.string().max(4000),node:z.string().max(200),reference:z.number().int().min(0),frame:z.number().int().min(0)}).strict();
+export const debugActionSchema=z.object({command:z.enum(['evaluate','continue','next','stepIn','stepOut','pause','scopes','variables','stackTrace','watch','unwatch','leap','escapeLoop','runTo','runUntil','visualize','removeVisualization']),expression:z.string().max(120000),node:z.string().max(200),reference:z.number().int().min(0),frame:z.number().int().min(0)}).strict();
 export const debugReplySchema=z.object({reply:z.string().min(1).max(16000),action:debugActionSchema.nullable()}).strict();
 export type DebugAction=z.infer<typeof debugActionSchema>;
 export interface DebugFrame {id:number;name:string;line:number;source?:{path?:string;name?:string};}
@@ -16,7 +17,7 @@ export const DEFAULT_DEBUG_INSTRUCTIONS='Mock or synthesize everything that can 
 export interface DebugViewState {
   status:'idle'|'prepared'|'starting'|'running'|'stopped'|'terminated';activeNodes:string[];watches:DebugWatch[];
   stack:DebugFrame[];frameId?:number;reason:string;diagnostics:string[];entry?:string;
-  scenarioId?:string;scenarioName?:string;scenarios?:{id:string;name:string}[];instructions:string;navigationSettings:NavigationSettings;trace:string[][];detectedLoop:string[];navigation?:NavigationProgress;navigationResult?:NavigationResult;
+  visualizations?:DebugVisualization[];scenarioId?:string;scenarioName?:string;scenarios?:{id:string;name:string}[];instructions:string;navigationSettings:NavigationSettings;trace:string[][];detectedLoop:string[];navigation?:NavigationProgress;navigationResult?:NavigationResult;
   messages:{role:'user'|'assistant'|'tool';content:string}[];busy:boolean;
 }
 export const emptyDebugState=():DebugViewState=>({status:'idle',activeNodes:[],watches:[],stack:[],reason:'',diagnostics:[],instructions:DEFAULT_DEBUG_INSTRUCTIONS,navigationSettings:{...DEFAULT_NAVIGATION_SETTINGS},trace:[],detectedLoop:[],messages:[],busy:false});
